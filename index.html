@@ -389,8 +389,9 @@ const FIELD_TO_DB = {
 // Supabase 表中合法的 JS 字段名集合（只发这些字段，避免多余字段触发 HTTP 400）
 const DB_ALLOWED_FIELDS = new Set([
   'id','date','productName','batchNo','qty','defectType','dispose',
-  'operator','remark','photos','workHours','createdAt','updatedAt',
+  'operator','remark','workHours','createdAt','updatedAt',
   'qcStatus','qcJudge','qcTime','qcRemark',
+  // 注意：photos 为本地 base64，不上传到 Supabase
 ]);
 const DB_TO_FIELD = Object.fromEntries(Object.entries(FIELD_TO_DB).map(([k,v])=>[v,k]));
 // 转换为 DB 行时：仅发送白名单字段，且跳过 null/undefined/空字符串
@@ -999,7 +1000,6 @@ function readFormFields(prefix='form') {
     defectType: v('defectType'),
     dispose:    v('dispose'),
     remark:     v('remark'),
-    dept: '',   // 保持DB兼容，发送空字符串
   };
   for(const[k,lbl] of [['date','发生日期'],['productName','产品名称'],['qty','不良数量'],['operator','操作员'],['defectType','不良类型'],['dispose','处置方式']]) {
     if(!data[k]) return {ok:false, error:`${lbl} 不能为空`};
