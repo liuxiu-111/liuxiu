@@ -1145,7 +1145,33 @@ async function exportCSV(){
   a.href=url;a.download=`返工返修记录_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.csv`;a.click();URL.revokeObjectURL(url);
   showToast(`已导出${data.length}条`,'success');
 }
-function copySubmitLink(){const url=location.href.split('?')[0]+'?mode=submit';navigator.clipboard.writeText(url).then(()=>showToast('填报链接已复制！','success')).catch(()=>prompt('请复制此链接：',url));}
+function getSubmitLink() {
+  const cc = getCloudConfig();
+  const base = (cc.siteUrl || location.href.split('?')[0]).replace(/\/?$/, '/');
+  return base + '?mode=submit';
+}
+function copySubmitLink() {
+  const url = getSubmitLink();
+  navigator.clipboard.writeText(url).then(()=>showToast('填报链接已复制！','success')).catch(()=>prompt('请复制此链接：',url));
+}
+/** 实时更新预览框 */
+function updateSubmitLinkPreview() {
+  const input = document.getElementById('cfg_siteUrl');
+  const preview = document.getElementById('submitLinkPreview');
+  if (!input || !preview) return;
+  const base = (input.value.trim() || location.href.split('?')[0]).replace(/\/?$/, '/');
+  preview.value = base + '?mode=submit';
+}
+/** 保存站点地址到云端配置 */
+function saveSiteUrl() {
+  const input = document.getElementById('cfg_siteUrl');
+  const url = (input?.value || '').trim();
+  if (!url) { showToast('请输入站点地址', 'error'); return; }
+  const cc = getCloudConfig();
+  saveCloudConfig({ ...cc, siteUrl: url.replace(/\/?$/, '/') });
+  updateSubmitLinkPreview();
+  showToast('填报链接已保存', 'success');
+}
 
 /* ============================================================
    ★ 模块二十二：行详情面板（已移除 dept/reason/workHours）
@@ -1319,10 +1345,22 @@ function renderSettingsTab(ct){
         </div>
         <div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
           <p class="text-xs font-semibold text-gray-600 mb-2">🔗 员工填报链接（发送到微信）</p>
+          <div class="flex gap-2 items-center mb-2">
+            <input type="text" id="cfg_siteUrl" value="${esc(cc.siteUrl||location.href.split('?')[0])}"
+              placeholder="https://你的域名/"
+              oninput="updateSubmitLinkPreview()"
+              class="flex-1 px-2 py-1.5 rounded-lg border border-gray-300 text-xs bg-white text-gray-700 font-mono focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+            <button onclick="saveSiteUrl()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shrink-0">保存</button>
+          </div>
           <div class="flex gap-2 items-center">
-            <input type="text" readonly value="${location.href.split('?')[0]}?mode=submit" class="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-xs bg-white text-gray-600 font-mono"/>
+            <input type="text" id="submitLinkPreview" readonly
+              value="${esc((cc.siteUrl||location.href.split('?')[0]).replace(/\/?$/,'/')+'?mode=submit')}"
+              class="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-xs bg-gray-100 text-gray-600 font-mono cursor-pointer"
+              onclick="copySubmitLink()" title="点击复制"/>
             <button onclick="copySubmitLink()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium shrink-0">复制</button>
           </div>
+          <p class="text-xs text-gray-400 mt-1.5">修改上方地址为 GitHub Pages 网址后点「保存」，链接将自动更新</p>
+        </div>
         </div>
       </div>
 
