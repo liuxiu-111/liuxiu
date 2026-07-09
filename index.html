@@ -8,6 +8,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <script>
     tailwind.config = {
@@ -421,9 +422,7 @@ const CloudDB = {
     if(!this.enabled()) return addRecordLocal(rec);
     try {
       setCloudStatus('syncing');
-      // 用 upsert 避免重复提交时报 409
-      const upsertHeaders = {...this.headers(), 'Prefer':'resolution=merge-duplicates,return=representation'};
-      const res=await this._fetch(this.base(),{method:'POST',headers:upsertHeaders,body:JSON.stringify(toDBRow(rec))});
+      const res=await this._fetch(this.base(),{method:'POST',headers:this.headers(),body:JSON.stringify(toDBRow(rec))});
       if(!res.ok) throw new Error('HTTP '+res.status);
       setCloudStatus('ok');
       const rows=await res.json(); return fromDBRow(Array.isArray(rows)?rows[0]:rows);
@@ -557,10 +556,9 @@ async function syncOfflineQueue() {
   for(const item of q) {
     try {
       if(item.action==='add') {
-        // 用 upsert（on_conflict=id），记录已存在时更新而不是报 409 冲突
-        const upsertHeaders = {...CloudDB.headers(), 'Prefer':'resolution=merge-duplicates,return=representation'};
-        const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:upsertHeaders,body:JSON.stringify(toDBRow(item.rec))});
+        const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(item.rec))});
         if(res.ok || res.status===409){
+          // 200/201 成功；409 说明之前其实已写入，均视为成功
           ok++; deleteRecordLocal(item.rec.id);
         } else {
           remaining.push(item); fail++;
@@ -1188,47 +1186,63 @@ function renderListTab(ct){
   const cfg=getConfig();
   const sO=(arr,cur,ph)=>`<option value="">${ph}</option>`+arr.map(v=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(v)}</option>`).join('');
   ct.innerHTML=`
+  <!-- 筛选栏 -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4 no-print">
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-      <input type="text" id="f_keyword" value="${esc(_ls.filters.keyword)}" placeholder="🔍 关键词" oninput="updateFilter('keyword',this.value)"
-        class="col-span-2 sm:col-span-1 px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
-      <select onchange="updateFilter('defectType',this.value)" class="px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none">${sO(cfg.defectTypeOptions,_ls.filters.defectType,'全部类型')}</select>
-      <select onchange="updateFilter('dispose',this.value)" class="px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none">${sO(cfg.disposeOptions,_ls.filters.dispose,'全部处置')}</select>
-      <select onchange="updateFilter('qcStatus',this.value)" class="px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none">
+    <div class="flex items-center gap-2 mb-3">
+      <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">筛选条件</span>
+      <div class="flex-1 h-px bg-gray-100"></div>
+      <button onclick="clearFilters()" class="text-xs text-blue-500 hover:text-blue-700 font-medium">↺ 重置</button>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+      <div class="col-span-2 sm:col-span-1 relative">
+        <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+        <input type="text" id="f_keyword" value="${esc(_ls.filters.keyword)}" placeholder="关键词搜索" oninput="updateFilter('keyword',this.value)"
+          class="w-full pl-8 pr-3 py-2 rounded-lg border border-gray-200 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none bg-gray-50 focus:bg-white transition"/>
+      </div>
+      <select onchange="updateFilter('defectType',this.value)" class="px-3 py-2 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition">${sO(cfg.defectTypeOptions,_ls.filters.defectType,'全部类型')}</select>
+      <select onchange="updateFilter('dispose',this.value)" class="px-3 py-2 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition">${sO(cfg.disposeOptions,_ls.filters.dispose,'全部处置')}</select>
+      <select onchange="updateFilter('qcStatus',this.value)" class="px-3 py-2 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition">
         ${sO(['待质检判定','返修合格','返修不合格'],_ls.filters.qcStatus,'全部审核状态')}
       </select>
-      <div class="flex items-center gap-1">
-        <input type="date" value="${_ls.filters.dateFrom}" onchange="updateFilter('dateFrom',this.value)" class="flex-1 px-2 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
-        <span class="text-gray-400 text-xs">~</span>
-        <input type="date" value="${_ls.filters.dateTo}" onchange="updateFilter('dateTo',this.value)" class="flex-1 px-2 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+      <div class="flex items-center gap-1 col-span-2 sm:col-span-1">
+        <input type="date" value="${_ls.filters.dateFrom}" onchange="updateFilter('dateFrom',this.value)" class="flex-1 px-2 py-2 rounded-lg border border-gray-200 text-xs bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition"/>
+        <span class="text-gray-300 font-bold">—</span>
+        <input type="date" value="${_ls.filters.dateTo}" onchange="updateFilter('dateTo',this.value)" class="flex-1 px-2 py-2 rounded-lg border border-gray-200 text-xs bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition"/>
       </div>
-      <button onclick="clearFilters()" class="px-3 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">重置筛选</button>
     </div>
   </div>
+
+  <!-- 操作栏 -->
   <div class="flex flex-wrap items-center justify-between gap-3 mb-3 no-print">
-    <div id="listSummary" class="text-sm text-gray-600"></div>
+    <div id="listSummary" class="text-sm text-gray-500 font-medium"></div>
     <div class="flex flex-wrap gap-2">
-      <button onclick="openQuickAdd()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-sm font-medium">➕ 快速新增</button>
-      <button id="batchDelBtn" onclick="batchDelete()" style="display:none" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium">🗑 批量删除 (<span id="batchCount">0</span>)</button>
-      <button id="batchQCBtn" onclick="openBatchQCModal()" style="display:none" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium">🔍 批量质检判定 (<span id="batchQCCount">0</span>)</button>
-      <button onclick="exportCSV()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium">📥 导出 CSV</button>
-      <button onclick="window.print()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium no-print">🖨 打印</button>
-      <button onclick="copySubmitLink()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium">🔗 复制填报链接</button>
+      <button onclick="openQuickAdd()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-sm shadow-blue-200 transition">➕ 新增</button>
+      <button id="batchDelBtn" onclick="batchDelete()" style="display:none" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-medium shadow-sm shadow-red-200 transition">🗑 删除(<span id="batchCount">0</span>)</button>
+      <button id="batchQCBtn" onclick="openBatchQCModal()" style="display:none" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium shadow-sm shadow-purple-200 transition">🔍 批量质检(<span id="batchQCCount">0</span>)</button>
+      <button onclick="exportExcel()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium shadow-sm shadow-emerald-200 transition">📥 导出</button>
+      <button onclick="window.print()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gray-500 hover:bg-gray-600 text-white text-sm font-medium transition no-print">🖨 打印</button>
+      <button onclick="copySubmitLink()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium transition">🔗 填报链接</button>
     </div>
   </div>
+
+  <!-- 表格 -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-4">
     <div class="table-wrap">
       <table class="w-full text-sm">
-        <thead class="bg-gray-50 border-b border-gray-200"><tr>
-          <th class="px-3 py-3 w-8 no-print"><input type="checkbox" id="checkAll" onchange="toggleSelectAll(this.checked)" class="w-4 h-4 rounded border-gray-300 cursor-pointer"/></th>
-          ${[{k:'date',l:'日期'},{k:'productName',l:'产品名称'},{k:'batchNo',l:'批次号'},{k:'qty',l:'数量'},{k:'defectType',l:'类型'},{k:'dispose',l:'处置'},{k:'operator',l:'操作员'},{k:'qcStatus',l:'审核状态'},{k:'qcJudge',l:'判定人'}]
-            .map(c=>`<th class="px-3 py-3 text-left font-semibold text-gray-600 cursor-pointer select-none whitespace-nowrap" onclick="sortBy('${c.k}')">${c.l} <span class="text-gray-400 text-xs">${_ls.sortKey===c.k?(_ls.sortDir==='asc'?'↑':'↓'):'⇅'}</span></th>`).join('')}
-          <th class="px-3 py-3 text-center font-semibold text-gray-600 no-print">操作</th>
+        <thead><tr class="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
+          <th class="px-3 py-3 w-8 no-print"><input type="checkbox" id="checkAll" onchange="toggleSelectAll(this.checked)" class="w-4 h-4 rounded border-gray-300 cursor-pointer accent-blue-600"/></th>
+          ${[{k:'date',l:'日期'},{k:'productName',l:'产品名称'},{k:'batchNo',l:'批次号'},{k:'qty',l:'数量'},{k:'defectType',l:'不良类型'},{k:'dispose',l:'处置方式'},{k:'operator',l:'操作员'},{k:'qcStatus',l:'审核状态'},{k:'qcJudge',l:'判定人'}]
+            .map(c=>`<th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer select-none whitespace-nowrap hover:text-blue-600 transition" onclick="sortBy('${c.k}')">${c.l}${_ls.sortKey===c.k?`<span class="ml-1 text-blue-500">${_ls.sortDir==='asc'?'↑':'↓'}</span>`:'<span class="ml-1 text-gray-300">↕</span>'}</th>`).join('')}
+          <th class="px-3 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide no-print">操作</th>
         </tr></thead>
         <tbody id="tableBody" class="divide-y divide-gray-50"></tbody>
       </table>
     </div>
-    <div id="emptyState" class="hidden py-16 text-center text-gray-400"><div class="text-4xl mb-3">📭</div><p class="text-sm">暂无匹配记录</p></div>
+    <div id="emptyState" class="hidden py-20 text-center">
+      <div class="text-5xl mb-4">📭</div>
+      <p class="text-gray-400 text-sm">暂无匹配记录</p>
+      <p class="text-gray-300 text-xs mt-1">尝试调整筛选条件</p>
+    </div>
   </div>
   <div id="pagination" class="flex flex-wrap items-center justify-between gap-3 no-print"></div>`;
   refreshTable();
@@ -1331,14 +1345,25 @@ function syncBatchBtn(){
 }
 async function batchDelete(){const n=_ls.selectedIds.size;if(!n)return;openConfirm(`确定删除选中的${n}条？`,async()=>{await CloudDB.deleteMany([..._ls.selectedIds]);_ls.selectedIds.clear();showToast(`已删除${n}条`,'success');refreshTable();},'确认删除');}
 function onRowClick(e,id){if(e.target.tagName==='BUTTON'||e.target.tagName==='INPUT')return;openDetailPanel(id);}
-async function exportCSV(){
+async function exportExcel(){
   const all=await CloudDB.getAll(),data=filterRecords(all,_ls.filters);
   if(!data.length){showToast('无数据可导出','warn');return;}
   const headers=['记录ID','日期','产品名称','批次号','不良数量','不良类型','处置方式','操作员','备注','照片数','审核状态','判定人','判定时间','质检备注','创建时间'];
-  let csv='﻿'+headers.join(',')+'\n';
-  data.forEach(r=>{csv+=[r.id,r.date,r.productName,r.batchNo||'',r.qty,r.defectType,r.dispose,r.operator,r.remark||'',(r.photos||[]).length,r.qcStatus||'待质检判定',r.qcJudge||'',r.qcTime?new Date(r.qcTime).toLocaleString('zh-CN'):'',r.qcRemark||'',r.createdAt?new Date(r.createdAt).toLocaleString('zh-CN'):''].map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')+'\n';});
-  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');
-  a.href=url;a.download=`返工返修记录_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.csv`;a.click();URL.revokeObjectURL(url);
+  const rows=data.map(r=>[
+    r.id, r.date, r.productName, r.batchNo||'', +r.qty, r.defectType, r.dispose,
+    r.operator, r.remark||'', (r.photos||[]).length,
+    r.qcStatus||'待质检判定', r.qcJudge||'',
+    r.qcTime?new Date(r.qcTime).toLocaleString('zh-CN'):'',
+    r.qcRemark||'',
+    r.createdAt?new Date(r.createdAt).toLocaleString('zh-CN'):''
+  ]);
+  const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
+  // 设置列宽
+  ws['!cols']=[{wch:22},{wch:12},{wch:20},{wch:14},{wch:10},{wch:14},{wch:12},{wch:10},{wch:20},{wch:8},{wch:14},{wch:10},{wch:20},{wch:20},{wch:20}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'返工返修记录');
+  const fileName=`返工返修记录_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.xlsx`;
+  XLSX.writeFile(wb,fileName);
   showToast(`已导出${data.length}条`,'success');
 }
 function getSubmitLink() {
@@ -1623,24 +1648,80 @@ let _statsF={dateFrom:'',dateTo:''};
 const _charts={};
 function renderStatsTab(ct){
   ct.innerHTML=`
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4 no-print">
-    <div class="flex flex-wrap gap-3 items-end">
-      <div><label class="block text-xs text-gray-500 mb-1">开始日期</label><input type="date" value="${_statsF.dateFrom}" onchange="_statsF.dateFrom=this.value;updateCharts()" class="px-3 py-2 rounded-lg border border-gray-300 text-sm"/></div>
-      <div><label class="block text-xs text-gray-500 mb-1">结束日期</label><input type="date" value="${_statsF.dateTo}" onchange="_statsF.dateTo=this.value;updateCharts()" class="px-3 py-2 rounded-lg border border-gray-300 text-sm"/></div>
-      <button onclick="_statsF={dateFrom:'',dateTo:''};renderAdminTab()" class="px-4 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">重置</button>
+  <!-- 日期筛选 -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-5 no-print">
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">时间范围</span>
+      <div class="flex items-center gap-2">
+        <input type="date" value="${_statsF.dateFrom}" onchange="_statsF.dateFrom=this.value;updateCharts()"
+          class="px-3 py-1.5 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition"/>
+        <span class="text-gray-300 font-bold">—</span>
+        <input type="date" value="${_statsF.dateTo}" onchange="_statsF.dateTo=this.value;updateCharts()"
+          class="px-3 py-1.5 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition"/>
+      </div>
+      <button onclick="_statsF={dateFrom:'',dateTo:''};renderAdminTab()"
+        class="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 text-sm hover:bg-gray-50 transition">↺ 重置</button>
     </div>
   </div>
-  <div id="statCards" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5"></div>
+
+  <!-- KPI 卡片 -->
+  <div id="statCards" class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6"></div>
+
+  <!-- 图表区 -->
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">不良类型分布（件数）</h3><div class="chart-container"><canvas id="chart_defectType"></canvas></div></div>
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">不良数量日趋势</h3><div class="chart-container"><canvas id="chart_trend"></canvas></div></div>
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">处置方式分布</h3><div class="chart-container"><canvas id="chart_dispose"></canvas></div></div>
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">操作员不良数量对比</h3><div class="chart-container"><canvas id="chart_operator"></canvas></div></div>
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">🔍 审核状态分布</h3><div class="chart-container"><canvas id="chart_qcStatus"></canvas></div></div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-blue-500 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">不良类型分布</h3>
+      </div>
+      <div class="chart-container"><canvas id="chart_defectType"></canvas></div>
+    </div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-blue-500 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">不良数量日趋势</h3>
+      </div>
+      <div class="chart-container"><canvas id="chart_trend"></canvas></div>
+    </div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-emerald-500 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">处置方式分布</h3>
+      </div>
+      <div class="chart-container"><canvas id="chart_dispose"></canvas></div>
+    </div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-purple-500 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">操作员不良数量对比</h3>
+      </div>
+      <div class="chart-container"><canvas id="chart_operator"></canvas></div>
+    </div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-yellow-400 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">审核状态分布</h3>
+      </div>
+      <div class="chart-container"><canvas id="chart_qcStatus"></canvas></div>
+    </div>
   </div>
+
+  <!-- TOP5 -->
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-4">🏆 TOP5 — 产品不良数量</h3><div id="top5Products"></div></div>
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-4">📦 TOP5 — 不良类型件数</h3><div id="top5Defects"></div></div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-red-400 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">TOP 5 · 产品不良数量</h3>
+      </div>
+      <div id="top5Products"></div>
+    </div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-purple-400 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">TOP 5 · 不良类型件数</h3>
+      </div>
+      <div id="top5Defects"></div>
+    </div>
   </div>`;
   updateCharts();
 }
@@ -1653,11 +1734,19 @@ async function updateCharts(){
   const ce=document.getElementById('statCards');
   if(ce){
     ce.innerHTML=[
-      {icon:'📦',label:'总不良件数',val:sumQty.toLocaleString(),color:'text-red-600',bg:'bg-red-50',border:'border-red-100'},
-      {icon:'📋',label:'记录总条数',val:data.length.toLocaleString(),color:'text-blue-600',bg:'bg-blue-50',border:'border-blue-100'},
-      {icon:'👷',label:'涉及操作员',val:operators,color:'text-purple-600',bg:'bg-purple-50',border:'border-purple-100'},
-      {icon:'⏳',label:'待审核单据',val:pendingQC,color:'text-yellow-600',bg:'bg-yellow-50',border:'border-yellow-100'},
-    ].map(c=>`<div class="stat-card ${c.bg} border ${c.border} rounded-2xl p-4"><div class="flex items-center justify-between mb-2"><span class="text-2xl">${c.icon}</span><span class="text-xs text-gray-400">${c.label}</span></div><div class="${c.color} text-2xl font-bold">${c.val}</div></div>`).join('');
+      {icon:'📦', label:'总不良件数', val:sumQty.toLocaleString(), color:'text-red-600',    bg:'bg-gradient-to-br from-red-50 to-red-100',    border:'border-red-100',    dot:'bg-red-400'},
+      {icon:'📋', label:'记录总条数', val:data.length.toLocaleString(), color:'text-blue-600', bg:'bg-gradient-to-br from-blue-50 to-blue-100',  border:'border-blue-100',   dot:'bg-blue-400'},
+      {icon:'👷', label:'涉及操作员', val:operators,  color:'text-purple-600', bg:'bg-gradient-to-br from-purple-50 to-purple-100', border:'border-purple-100', dot:'bg-purple-400'},
+      {icon:'⏳', label:'待审核单据', val:pendingQC,  color:'text-amber-600',  bg:'bg-gradient-to-br from-amber-50 to-amber-100',   border:'border-amber-100',  dot:'bg-amber-400'},
+    ].map(c=>`
+      <div class="stat-card ${c.bg} border ${c.border} rounded-2xl p-5 relative overflow-hidden">
+        <div class="flex items-start justify-between mb-3">
+          <span class="text-2xl">${c.icon}</span>
+          <span class="w-2 h-2 rounded-full ${c.dot} mt-1"></span>
+        </div>
+        <div class="${c.color} text-3xl font-bold tracking-tight mb-1">${c.val}</div>
+        <div class="text-xs text-gray-500 font-medium">${c.label}</div>
+      </div>`).join('');
   }
   const COLORS=['#3b82f6','#ef4444','#f59e0b','#10b981','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1'];
   const gQ=f=>{const m={};data.forEach(r=>{const k=r[f]||'未知';m[k]=(m[k]||0)+(+r.qty||0)});return m;};
@@ -1694,117 +1783,123 @@ function drawChart(canvasId,type,labels,values,colors){
 function renderSettingsTab(ct){
   const cfg=getConfig(),cc=getCloudConfig();
   ct.innerHTML=`
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-    <div class="space-y-4">
+  <div class="max-w-3xl mx-auto space-y-4">
 
-      <!-- 云端配置 -->
-      <div class="bg-white rounded-2xl shadow-sm border ${cc.url&&cc.key?'border-green-200':'border-blue-200'} p-5">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-sm font-semibold text-gray-700">☁️ 云端同步配置</h3>
-          <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${cc.url&&cc.key?'bg-green-100 text-green-700':'bg-gray-100 text-gray-500'}">
-            <span class="w-2 h-2 rounded-full ${cc.url&&cc.key?'bg-green-500':'bg-gray-400'}"></span>
-            ${cc.url&&cc.key?'已连接云端':'本地模式'}
-          </span>
+    <!-- 基础配置 -->
+    <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-blue-500 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">基础配置</h3>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">公司名称</label>
+          <input type="text" id="cfg_companyName" value="${esc(cfg.companyName)}"
+            class="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition"/>
         </div>
-        ${cc.url&&cc.key?
-          `<div class="bg-green-50 border border-green-200 rounded-xl p-3 mb-3 text-xs text-green-800">✅ 已连接 Supabase：<span class="break-all text-green-600">${esc(cc.url)}</span></div>`:
-          `<div class="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 text-xs text-blue-800">💡 未配置云端，数据仅存本地浏览器</div>`}
-        <div class="space-y-2 mb-3">
-          <div><label class="block text-xs font-semibold text-gray-600 mb-1">Supabase Project URL</label>
-          <input type="text" id="cfg_supabase_url" value="${esc(cc.url||'')}" placeholder="https://xxxxxxxxxx.supabase.co" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/></div>
-          <div><label class="block text-xs font-semibold text-gray-600 mb-1">anon public Key</label>
-          <input type="text" id="cfg_supabase_key" value="${esc(cc.key||'')}" placeholder="eyJhbGci..." class="w-full px-3 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/></div>
-        </div>
-        <div class="flex gap-2 flex-wrap mb-3">
-          <button onclick="testAndSaveCloud()" class="flex-1 min-w-[100px] py-2 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-xs">✅ 测试并保存</button>
-          ${cc.url&&cc.key?`<button onclick="clearCloudConfig()" class="flex-1 min-w-[100px] py-2 border border-red-300 text-red-600 hover:bg-red-50 rounded-xl text-xs">🗑 清除云端配置</button>`:''}
-        </div>
-        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
-          <p class="text-xs font-semibold text-gray-600 mb-2">🔗 员工填报链接（发送到微信）</p>
-          <div class="flex gap-2 items-center mb-2">
-            <input type="text" id="cfg_siteUrl" value="${esc(cc.siteUrl||location.href.split('?')[0])}"
-              placeholder="https://你的域名/"
-              oninput="updateSubmitLinkPreview()"
-              class="flex-1 px-2 py-1.5 rounded-lg border border-gray-300 text-xs bg-white text-gray-700 font-mono focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
-            <button onclick="saveSiteUrl()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shrink-0">保存</button>
-          </div>
-          <div class="flex gap-2 items-center">
-            <input type="text" id="submitLinkPreview" readonly
-              value="${esc((cc.siteUrl||location.href.split('?')[0]).replace(/\/?$/,'/')+'?mode=submit')}"
-              class="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-xs bg-gray-100 text-gray-600 font-mono cursor-pointer"
-              onclick="copySubmitLink()" title="点击复制"/>
-            <button onclick="copySubmitLink()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium shrink-0">复制</button>
-          </div>
-          <p class="text-xs text-gray-400 mt-1.5">修改上方地址为 GitHub Pages 网址后点「保存」，链接将自动更新</p>
-        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">管理员密码 <span class="text-gray-300">（留空则无需密码）</span></label>
+          <input type="password" id="cfg_adminPassword" value="${esc(cfg.adminPassword||'')}" placeholder="留空无需密码"
+            class="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition"/>
         </div>
       </div>
+      <button onclick="saveSettings()" class="mt-4 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition">保存</button>
+    </div>
 
-      <!-- 基础配置 -->
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-        <h3 class="text-sm font-semibold text-gray-700 mb-4">🏢 基础配置</h3>
-        <label class="block text-xs font-semibold text-gray-600 mb-1">公司名称</label>
-        <input type="text" id="cfg_companyName" value="${esc(cfg.companyName)}" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
-        <label class="block text-xs font-semibold text-gray-600 mb-1">管理员密码 <span class="text-gray-400 font-normal">（留空无需密码）</span></label>
-        <input type="password" id="cfg_adminPassword" value="${esc(cfg.adminPassword||'')}" placeholder="设置密码或留空" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
-        <button onclick="saveSettings()" class="w-full py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-sm">💾 保存基础配置</button>
+    <!-- 云端配置 -->
+    <div class="bg-white rounded-2xl border ${cc.url&&cc.key?'border-green-200':'border-gray-100'} shadow-sm p-5">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-2">
+          <span class="w-1 h-4 ${cc.url&&cc.key?'bg-green-500':'bg-gray-300'} rounded-full"></span>
+          <h3 class="text-sm font-semibold text-gray-700">云端同步</h3>
+        </div>
+        <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${cc.url&&cc.key?'bg-green-100 text-green-700':'bg-gray-100 text-gray-500'}">
+          <span class="w-1.5 h-1.5 rounded-full ${cc.url&&cc.key?'bg-green-500':'bg-gray-400'}"></span>
+          ${cc.url&&cc.key?'已连接':'未配置'}
+        </span>
+      </div>
+      ${cc.url&&cc.key?`<div class="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2 mb-3 truncate">✅ ${esc(cc.url)}</div>`:''}
+      <div class="grid grid-cols-1 gap-3 mb-3">
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">Supabase URL</label>
+          <input type="text" id="cfg_supabase_url" value="${esc(cc.url||'')}" placeholder="https://xxxxxxxxxx.supabase.co"
+            class="w-full px-3 py-2 rounded-lg border border-gray-200 text-xs bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition font-mono"/>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">anon public Key</label>
+          <input type="text" id="cfg_supabase_key" value="${esc(cc.key||'')}" placeholder="eyJhbGci..."
+            class="w-full px-3 py-2 rounded-lg border border-gray-200 text-xs bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition font-mono"/>
+        </div>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="testAndSaveCloud()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition">测试并保存</button>
+        ${cc.url&&cc.key?`<button onclick="clearCloudConfig()" class="px-4 py-2 border border-red-200 text-red-500 hover:bg-red-50 text-sm rounded-xl transition">清除配置</button>`:''}
+        ${cc.url&&cc.key?`<button id="syncQCBtn" onclick="syncQCToCloud()" class="px-4 py-2 border border-purple-200 text-purple-600 hover:bg-purple-50 text-sm rounded-xl transition">☁️ 同步质检数据</button>`:''}
+      </div>
+      <div class="mt-4 pt-4 border-t border-gray-100">
+        <label class="block text-xs font-medium text-gray-500 mb-1.5">员工填报链接</label>
+        <div class="flex gap-2 items-center mb-2">
+          <input type="text" id="cfg_siteUrl" value="${esc(cc.siteUrl||location.href.split('?')[0])}"
+            placeholder="https://你的域名/" oninput="updateSubmitLinkPreview()"
+            class="flex-1 px-3 py-1.5 rounded-lg border border-gray-200 text-xs bg-gray-50 focus:bg-white font-mono focus:ring-2 focus:ring-blue-400 focus:outline-none transition"/>
+          <button onclick="saveSiteUrl()" class="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-xs font-medium shrink-0 transition">保存</button>
+        </div>
+        <div class="flex gap-2 items-center">
+          <input type="text" id="submitLinkPreview" readonly
+            value="${esc((cc.siteUrl||location.href.split('?')[0]).replace(/\/?$/,'/')+'?mode=submit')}"
+            class="flex-1 px-3 py-1.5 rounded-lg border border-gray-100 text-xs bg-gray-50 text-gray-500 font-mono cursor-pointer"
+            onclick="copySubmitLink()" title="点击复制"/>
+          <button onclick="copySubmitLink()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium shrink-0 transition">复制</button>
+        </div>
       </div>
     </div>
 
-    <div class="space-y-4">
-
-      <!-- ★ 产品名称管理 -->
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-        <h3 class="text-sm font-semibold text-gray-700 mb-1">📦 产品名称管理</h3>
-        <p class="text-xs text-gray-400 mb-3">以下列表用于填报时下拉选择，每行一个产品名称</p>
-        <textarea id="cfg_productOptions" rows="8"
-          class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm resize-none focus:ring-2 focus:ring-blue-400 focus:outline-none mb-3"
-          placeholder="每行输入一个产品名称&#10;例如：&#10;A型支架&#10;B型外壳&#10;C型螺母">${esc((cfg.productOptions||[]).join('\n'))}</textarea>
-        <button onclick="saveProductOptions()" class="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl text-sm">💾 保存产品列表</button>
+    <!-- 分类配置 -->
+    <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-orange-400 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">分类配置</h3>
       </div>
-
-      <!-- 不良类型 + 处置方式 -->
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-        <h3 class="text-sm font-semibold text-gray-700 mb-4">📂 分类配置</h3>
-        <label class="block text-xs font-semibold text-gray-600 mb-1">不良类型（每行一个）</label>
-        <textarea id="cfg_defectTypeOptions" rows="5"
-          class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 resize-none focus:ring-2 focus:ring-blue-400 focus:outline-none">${esc(cfg.defectTypeOptions.join('\n'))}</textarea>
-        <label class="block text-xs font-semibold text-gray-600 mb-1">处置方式（每行一个）</label>
-        <textarea id="cfg_disposeOptions" rows="4"
-          class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 resize-none focus:ring-2 focus:ring-blue-400 focus:outline-none">${esc(cfg.disposeOptions.join('\n'))}</textarea>
-        <button onclick="saveClassifySettings()" class="w-full py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-sm">💾 保存分类配置</button>
-      </div>
-
-      <!-- 备份恢复 -->
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-        <h3 class="text-sm font-semibold text-gray-700 mb-4">💾 数据备份与恢复</h3>
-        <div class="flex gap-2 flex-wrap mb-3">
-          <button onclick="exportJSON()" class="flex-1 min-w-[110px] py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl text-sm">📤 导出 JSON</button>
-          <button onclick="document.getElementById('importFile').click()" class="flex-1 min-w-[110px] py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl text-sm">📥 导入 JSON</button>
-          <input type="file" id="importFile" accept=".json" class="hidden" onchange="importJSON(event)"/>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="sm:col-span-1">
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">产品名称 <span class="text-gray-300">（每行一个）</span></label>
+          <textarea id="cfg_productOptions" rows="7"
+            class="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm resize-none bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition"
+            placeholder="A型支架&#10;B型外壳&#10;C型螺母">${esc((cfg.productOptions||[]).join('\n'))}</textarea>
+          <button onclick="saveProductOptions()" class="mt-2 w-full py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-xl transition">保存产品列表</button>
         </div>
-        <div class="border border-red-200 rounded-xl p-4 bg-red-50">
-          <h4 class="text-sm font-semibold text-red-700 mb-2">⚠️ 危险区</h4>
-          <button onclick="clearAllDataConfirm()" class="w-full py-2 border border-red-400 text-red-600 hover:bg-red-100 rounded-lg text-sm">🗑 清空全部数据</button>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">不良类型 <span class="text-gray-300">（每行一个）</span></label>
+          <textarea id="cfg_defectTypeOptions" rows="7"
+            class="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm resize-none bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition">${esc(cfg.defectTypeOptions.join('\n'))}</textarea>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">处置方式 <span class="text-gray-300">（每行一个）</span></label>
+          <textarea id="cfg_disposeOptions" rows="7"
+            class="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm resize-none bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none transition">${esc(cfg.disposeOptions.join('\n'))}</textarea>
         </div>
       </div>
+      <button onclick="saveClassifySettings()" class="mt-3 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition">保存分类配置</button>
+    </div>
 
-      <!-- 存储情况 -->
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-        <h3 class="text-sm font-semibold text-gray-700 mb-3">📊 存储使用情况</h3>
-        <div id="storageInfo"></div>
+    <!-- 数据管理 -->
+    <div class="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="w-1 h-4 bg-emerald-500 rounded-full"></span>
+        <h3 class="text-sm font-semibold text-gray-700">数据管理</h3>
       </div>
-
-      <!-- 质检数据同步 -->
-      <div class="bg-white rounded-2xl shadow-sm border border-purple-200 p-5">
-        <h3 class="text-sm font-semibold text-gray-700 mb-2">🔍 质检数据同步</h3>
-        <p class="text-xs text-gray-500 mb-3">如果手机端看不到质检判定结果，说明本机判定数据尚未写入云端。点击下方按钮将本机所有质检结果推送到 Supabase，手机刷新后即可同步显示。</p>
-        <button id="syncQCBtn" onclick="syncQCToCloud()"
-          class="w-full py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-xl text-sm">
-          ☁️ 同步质检结果到云端
-        </button>
+      <div class="flex flex-wrap gap-2 mb-4">
+        <button onclick="exportJSON()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-xl transition">📤 导出备份</button>
+        <button onclick="document.getElementById('importFile').click()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-xl transition">📥 导入数据</button>
+        <input type="file" id="importFile" accept=".json" class="hidden" onchange="importJSON(event)"/>
+      </div>
+      <div id="storageInfo" class="mb-4"></div>
+      <div class="border border-red-100 rounded-xl p-4 bg-red-50">
+        <p class="text-xs text-red-500 font-medium mb-2">⚠️ 危险操作，不可恢复</p>
+        <button onclick="clearAllDataConfirm()" class="px-4 py-2 border border-red-300 text-red-600 hover:bg-red-100 text-sm rounded-xl transition">清空全部数据</button>
       </div>
     </div>
+
   </div>`;
   renderStorageInfo();
 }
