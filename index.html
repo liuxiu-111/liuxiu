@@ -439,16 +439,14 @@ const CloudDB = {
       setCloudStatus('syncing');
       const body = toDBRow(rec);
       const res=await this._fetch(this.base(),{method:'POST',headers:this.headers(),body:JSON.stringify(body)});
-      if(!res.ok) {
-        const errText = await res.text().catch(()=>'');
-        console.error('Supabase add 失败:', res.status, errText, '\n发送字段:', Object.keys(body));
-        throw new Error('HTTP '+res.status+': '+errText);
-      }
+      if(!res.ok) throw new Error('HTTP '+res.status);
       setCloudStatus('ok');
       const rows=await res.json(); return fromDBRow(Array.isArray(rows)?rows[0]:rows);
     } catch(e) {
       setCloudStatus('error');
       addRecordLocal(rec); return rec;
+    }
+  },
     }
   },
   async update(id,patch) {
@@ -1121,10 +1119,13 @@ async function handleSubmit(e){
   const btn=document.getElementById('submitBtn');
   if(btn){btn.disabled=true;btn.textContent='提交中...';}
   saveMemory({operator:data.operator});
-  data.photos=_photos.map(p=>({dataUrl:p.dataUrl,name:p.name}));
+  // 可选字段确保有空字符串默认值，避免 Supabase NOT NULL 报错
+  data.batchNo  = data.batchNo  || '';
+  data.remark   = data.remark   || '';
+  data.workHours= data.workHours|| '';
   data.id='R'+Date.now()+String(Math.floor(Math.random()*1000)).padStart(3,'0');
   data.createdAt=new Date().toISOString();
-  data.qcStatus='待质检判定';  // 默认审核状态
+  data.qcStatus='待质检判定';
   const rec=await CloudDB.add(data);
   if(btn){btn.disabled=false;btn.textContent='✅ 提交记录';}
   // 判断是否真正写入云端（连接异常时 rec 是本地对象，cloudStatus 为 error）
@@ -1499,7 +1500,11 @@ async function saveEditRecord(){
     if(orig?.qcRemark)data.qcRemark=orig.qcRemark;
     await CloudDB.update(_editingId,data);showToast('记录已更新','success');
   }else{
-    data.qcStatus='待质检判定';  // 快速新增也默认待质检
+    // 可选字段确保有空字符串默认值，避免 Supabase NOT NULL 报错
+    data.batchNo  = data.batchNo  || '';
+    data.remark   = data.remark   || '';
+    data.workHours= data.workHours|| '';
+    data.qcStatus='待质检判定';
     await CloudDB.add(data);showToast('记录已新增','success');
   }
   closeEditModal();await refreshTable();if(_adminTab==='stats')await updateCharts();
