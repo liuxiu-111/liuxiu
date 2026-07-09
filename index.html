@@ -1567,8 +1567,13 @@ async function saveQCResult() {
   _ls.selectedIds.clear();
   if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '✅ 提交判定'; }
 
-  // ③ 先等待 Supabase PATCH 完成，避免轮询竞态覆盖
-  stopPolling();  // 暂停轮询，防止 PATCH 未完成时被覆盖
+  // ③ 立即用内存缓存渲染 UI，用户无感知延迟
+  await refreshTable(false, true);
+  if (_adminTab === 'stats') await updateCharts();
+  showToast(`质检判定完成：${_qcSelected}（共 ${n} 条）`, 'success');
+
+  // ④ 后台同步写 Supabase，暂停轮询防竞态，写完再恢复
+  stopPolling();
   for (const id of targetIds) {
     try {
       const ok = await CloudDB.update(id, patch);
@@ -1580,12 +1585,7 @@ async function saveQCResult() {
       if (!exists) { q.push({ action: 'qcPatch', id, patch }); saveOfflineQueue(q); updateOfflineBar(); }
     }
   }
-  startPolling();  // PATCH 全部完成后再恢复轮询
-
-  // ④ 用缓存渲染，UI 即时更新（无需重新拉云端，此时云端已是最新）
-  await refreshTable(false, true);
-  if (_adminTab === 'stats') await updateCharts();
-  showToast(`质检判定完成：${_qcSelected}（共 ${n} 条）`, 'success');
+  startPolling();
 }
 
 /** 把本地 QC store 中的所有结果同步到 Supabase（修复手机端不同步问题） */
