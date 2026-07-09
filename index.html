@@ -394,12 +394,12 @@ const DB_ALLOWED_FIELDS = new Set([
   // 注意：photos 为本地 base64，不上传到 Supabase
 ]);
 const DB_TO_FIELD = Object.fromEntries(Object.entries(FIELD_TO_DB).map(([k,v])=>[v,k]));
-// 转换为 DB 行时：仅发送白名单字段，且跳过 null/undefined/空字符串
+// 转换为 DB 行时：仅发送白名单字段，跳过 null/undefined（空字符串保留，Supabase 允许空字符串列）
 function toDBRow(rec) {
   const r={};
   for(const[k,v] of Object.entries(rec)) {
-    if(!DB_ALLOWED_FIELDS.has(k)) continue;       // 过滤 dept 等非法字段
-    if(v===null||v===undefined||v==='') continue; // 过滤空值
+    if(!DB_ALLOWED_FIELDS.has(k)) continue;  // 过滤 dept/photos 等非法字段
+    if(v===null||v===undefined) continue;    // 只过滤 null/undefined，空字符串正常发送
     r[FIELD_TO_DB[k]||k]=v;
   }
   return r;
@@ -433,12 +433,18 @@ const CloudDB = {
     if(!this.enabled()) return addRecordLocal(rec);
     try {
       setCloudStatus('syncing');
-      const res=await this._fetch(this.base(),{method:'POST',headers:this.headers(),body:JSON.stringify(toDBRow(rec))});
-      if(!res.ok) throw new Error('HTTP '+res.status);
+      const body = toDBRow(rec);
+      const res=await this._fetch(this.base(),{method:'POST',headers:this.headers(),body:JSON.stringify(body)});
+      if(!res.ok) {
+        const errText = await res.text().catch(()=>'');
+        console.error('Supabase add 失败:', res.status, errText, '\n发送字段:', Object.keys(body));
+        throw new Error('HTTP '+res.status+': '+errText);
+      }
       setCloudStatus('ok');
       const rows=await res.json(); return fromDBRow(Array.isArray(rows)?rows[0]:rows);
     } catch(e) {
-      setCloudStatus('error'); addToOfflineQueue({action:'add',rec}); addRecordLocal(rec); return rec;
+      setCloudStatus('error');
+      addRecordLocal(rec); return rec;
     }
   },
   async update(id,patch) {
@@ -1117,7 +1123,9 @@ async function handleSubmit(e){
   data.qcStatus='待质检判定';  // 默认审核状态
   const rec=await CloudDB.add(data);
   if(btn){btn.disabled=false;btn.textContent='✅ 提交记录';}
-  showToast(CloudDB.enabled()?'提交成功！数据已同步到云端':'提交成功！','success');
+  // 判断是否真正写入云端（连接异常时 rec 是本地对象，cloudStatus 为 error）
+  const cloudOk = CloudDB.enabled() && document.getElementById('cloudDot')?.classList.contains('bg-green-400');
+  showToast(cloudOk ? '提交成功！数据已同步到云端' : '提交成功！（请检查云端连接状态）', cloudOk ? 'success' : 'warn');
   _photos=[]; resetSubmitForm(); renderRecentSubmits(rec); updatePhotoCount();
 }
 
