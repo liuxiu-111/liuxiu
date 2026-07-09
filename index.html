@@ -347,9 +347,10 @@ async function pullConfigFromCloud() {
   if (!cc.url || !cc.key) return null;
   try {
     const base = cc.url.replace(/\/$/, '') + '/rest/v1/rework_config';
-    const res = await fetch(base + "?key=eq.system&limit=1", {
+    // 使用带超时的 _fetch（8s），避免 Supabase 暂停时页面卡死在加载遮罩
+    const res = await CloudDB._fetch(base + "?key=eq.system&limit=1", {
       headers: { 'apikey': cc.key, 'Authorization': `Bearer ${cc.key}` },
-    });
+    }, 8000);
     if (!res.ok) return null;
     const rows = await res.json();
     if (!rows.length) return null;
@@ -358,7 +359,7 @@ async function pullConfigFromCloud() {
     localStorage.setItem(LS_CONFIG_KEY, JSON.stringify(cfg));
     return cfg;
   } catch (e) {
-    console.warn('拉取云端配置失败:', e);
+    console.warn('拉取云端配置失败，使用本地配置:', e);
     return null;
   }
 }
@@ -549,17 +550,28 @@ function updateOfflineBar() {
 async function syncOfflineQueue() {
   const q=getOfflineQueue(); if(!q.length){showToast('无待同步记录','info');return;}
   if(!CloudDB.enabled()){showToast('请先配置云端连接','warn');return;}
-  let ok=0,fail=0; const remaining=[];
+  let ok=0,fail=0,lastErrMsg=''; const remaining=[];
   for(const item of q) {
     try {
       if(item.action==='add') {
         const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(item.rec))});
-        if(res.ok){ok++;deleteRecordLocal(item.rec.id);}else{remaining.push(item);fail++;}
+        if(res.ok){ok++;deleteRecordLocal(item.rec.id);}
+        else{
+          remaining.push(item);fail++;
+          if(res.status===503||res.status===0) lastErrMsg='云端服务暂停，请登录 Supabase 控制台点击 Restore 恢复项目';
+          else if(res.status===401||res.status===403) lastErrMsg='云端密钥无效，请在系统设置中重新配置';
+          else lastErrMsg=`服务器返回错误 HTTP ${res.status}`;
+        }
       }
-    } catch{remaining.push(item);fail++;}
+    } catch(e){
+      remaining.push(item);fail++;
+      if(e.name==='AbortError') lastErrMsg='连接超时，请检查网络或云端服务是否正常';
+      else lastErrMsg='网络异常：'+e.message;
+    }
   }
   saveOfflineQueue(remaining); updateOfflineBar();
-  showToast(ok>0?`同步完成：${ok}条成功${fail>0?'，'+fail+'条失败':''}`:'同步失败，请检查网络',ok>0?'success':'error');
+  if(ok>0) showToast(`同步完成：${ok}条成功${fail>0?'，'+fail+'条失败':''}`, 'success');
+  else showToast(lastErrMsg||'同步失败，请检查网络', 'error');
   if(ok>0)refreshTable();
 }
 
