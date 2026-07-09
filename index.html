@@ -561,7 +561,6 @@ async function syncOfflineQueue() {
         const upsertHeaders = {...CloudDB.headers(), 'Prefer':'resolution=merge-duplicates,return=representation'};
         const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:upsertHeaders,body:JSON.stringify(toDBRow(item.rec))});
         if(res.ok || res.status===409){
-          // 200/201 = 写入成功；409 = 已存在（之前其实写进去了），均视为成功清除队列
           ok++; deleteRecordLocal(item.rec.id);
         } else {
           remaining.push(item); fail++;
@@ -569,6 +568,11 @@ async function syncOfflineQueue() {
           else if(res.status===401||res.status===403) lastErrMsg='云端密钥无效，请在系统设置中重新配置';
           else lastErrMsg=`服务器返回错误 HTTP ${res.status}`;
         }
+      } else if(item.action==='qcPatch') {
+        // 质检判定离线队列：重试 PATCH
+        const result = await CloudDB.update(item.id, item.patch);
+        if(result) { ok++; }
+        else { remaining.push(item); fail++; lastErrMsg='质检数据写入失败，请稍后重试'; }
       }
     } catch(e){
       remaining.push(item); fail++;
@@ -1558,24 +1562,30 @@ async function saveQCResult() {
   }
 
   const n = _qcTargetIds.length;
+  const targetIds = [..._qcTargetIds];
   closeQCModal();
   _ls.selectedIds.clear();
-
   if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '✅ 提交判定'; }
 
-  // ③ 直接用缓存渲染，UI 即时更新
+  // ③ 先等待 Supabase PATCH 完成，避免轮询竞态覆盖
+  stopPolling();  // 暂停轮询，防止 PATCH 未完成时被覆盖
+  for (const id of targetIds) {
+    try {
+      const ok = await CloudDB.update(id, patch);
+      if (!ok) throw new Error('update returned false');
+    } catch(e) {
+      console.warn('质检云端同步失败，已加入离线队列:', id, e);
+      const q = getOfflineQueue();
+      const exists = q.some(x => x.action === 'qcPatch' && x.id === id);
+      if (!exists) { q.push({ action: 'qcPatch', id, patch }); saveOfflineQueue(q); updateOfflineBar(); }
+    }
+  }
+  startPolling();  // PATCH 全部完成后再恢复轮询
+
+  // ④ 用缓存渲染，UI 即时更新（无需重新拉云端，此时云端已是最新）
   await refreshTable(false, true);
   if (_adminTab === 'stats') await updateCharts();
   showToast(`质检判定完成：${_qcSelected}（共 ${n} 条）`, 'success');
-
-  // ④ 后台尝试写 Supabase（有列就写进去；没列也无妨，本地 store 已保底）
-  const targetIds = [..._qcTargetIds];
-  (async () => {
-    for (const id of targetIds) {
-      try { await CloudDB.update(id, patch); }
-      catch(e) { console.warn('质检云端同步失败（本地已保存）:', id, e); }
-    }
-  })();
 }
 
 /** 把本地 QC store 中的所有结果同步到 Supabase（修复手机端不同步问题） */
