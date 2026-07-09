@@ -1,0 +1,1566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>返工返修数据管理系统</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { primary: { DEFAULT:'#1e40af', light:'#3b82f6', dark:'#1e3a8a' } } } }
+    }
+  </script>
+
+  <style>
+    body { font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:#f0f4f8; }
+    .tab-btn.active { border-bottom:3px solid #1e40af; color:#1e40af; font-weight:600; }
+    .chart-container { position:relative; height:260px; }
+    @media (max-width:768px) {
+      .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+      .hide-mobile { display:none !important; }
+    }
+    .stat-card { transition:all .2s ease; cursor:default; }
+    .stat-card:hover { transform:translateY(-2px); box-shadow:0 8px 25px rgba(30,64,175,.15); }
+    tbody tr:hover  { background:#eff6ff !important; }
+    tbody tr.selected-row { background:#dbeafe !important; }
+    tbody tr { cursor:pointer; }
+    .modal-enter { animation:fadeIn .15s ease; }
+    .modal-box-enter { animation:slideUp .2s ease; }
+    @keyframes fadeIn  { from{opacity:0} to{opacity:1} }
+    @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+    #toast { transition:opacity .3s ease; }
+    #detailPanel { transition:transform .25s ease, opacity .25s ease; }
+    #detailPanel.hidden-panel { transform:translateX(100%); opacity:0; pointer-events:none; }
+    ::-webkit-scrollbar { width:6px; height:6px; }
+    ::-webkit-scrollbar-track { background:#f1f5f9; }
+    ::-webkit-scrollbar-thumb { background:#94a3b8; border-radius:3px; }
+    @media print {
+      header,footer,.no-print { display:none !important; }
+      body { background:#fff; }
+      .bg-white { box-shadow:none !important; border:1px solid #ddd !important; }
+    }
+    #pwMask { position:fixed;inset:0;background:linear-gradient(135deg,#1e3a8a,#1e40af);z-index:200;display:flex;align-items:center;justify-content:center; }
+    #pwMask.hidden { display:none; }
+
+    /* ===== 二维码扫描器 ===== */
+    #qrModal { position:fixed;inset:0;background:#000;z-index:300;display:flex;flex-direction:column; }
+    #qrModal.hidden { display:none; }
+    #qrVideo { width:100%;height:100%;object-fit:cover;display:block; }
+    .qr-overlay { position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 30%,rgba(0,0,0,0.55) 70%); }
+    .qr-frame { position:absolute;top:50%;left:50%;transform:translate(-50%,-55%);width:min(65vw,260px);height:min(65vw,260px);border:2px solid rgba(255,255,255,.3);border-radius:12px; }
+    .qr-frame::before,.qr-frame::after,.qr-frame-inner::before,.qr-frame-inner::after { content:'';position:absolute;width:22px;height:22px;border-color:#4ade80;border-style:solid; }
+    .qr-frame::before  { top:-2px;left:-2px;border-width:4px 0 0 4px;border-radius:4px 0 0 0; }
+    .qr-frame::after   { top:-2px;right:-2px;border-width:4px 4px 0 0;border-radius:0 4px 0 0; }
+    .qr-frame-inner::before { bottom:-2px;left:-2px;border-width:0 0 4px 4px;border-radius:0 0 0 4px; }
+    .qr-frame-inner::after  { bottom:-2px;right:-2px;border-width:0 4px 4px 0;border-radius:0 0 4px 0; }
+    .scan-line { position:absolute;left:8px;right:8px;height:2px;background:linear-gradient(to right,transparent,#4ade80,transparent);box-shadow:0 0 6px rgba(74,222,128,.8);animation:scanAnim 2s ease-in-out infinite; }
+    @keyframes scanAnim { 0%,100%{top:10px} 50%{top:calc(100% - 12px)} }
+
+    /* ===== 照片 ===== */
+    .photo-thumb-wrap { position:relative;aspect-ratio:1/1;overflow:hidden;border-radius:10px;background:#f1f5f9;border:1px solid #e2e8f0;cursor:pointer;transition:transform .15s; }
+    .photo-thumb-wrap:hover { transform:scale(1.03); }
+    .photo-thumb-wrap img { width:100%;height:100%;object-fit:cover;display:block; }
+    .photo-del-btn { position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(239,68,68,.85);color:#fff;font-size:11px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:none;line-height:1; }
+    .photo-add-slot { aspect-ratio:1/1;border:2px dashed #cbd5e1;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;transition:all .15s;background:#f8fafc;color:#94a3b8;font-size:11px; }
+    .photo-add-slot:hover { border-color:#3b82f6;color:#3b82f6;background:#eff6ff; }
+    #lightbox { position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:400;display:flex;align-items:center;justify-content:center;cursor:zoom-out; }
+    #lightbox.hidden { display:none; }
+    #lightboxImg { max-width:96vw;max-height:90vh;object-fit:contain;border-radius:8px;cursor:default; }
+    #lightboxClose { position:absolute;top:16px;right:20px;width:40px;height:40px;background:rgba(255,255,255,.15);border:none;border-radius:50%;color:#fff;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center; }
+    #lightboxCaption { position:absolute;bottom:20px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.7);font-size:12px; }
+    .upload-btn { display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 14px;border-radius:12px;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;user-select:none; }
+    .upload-btn-camera { background:#eff6ff;border:1.5px solid #bfdbfe;color:#1d4ed8; }
+    .upload-btn-camera:hover { background:#dbeafe; }
+    .upload-btn-gallery { background:#f8fafc;border:1.5px solid #e2e8f0;color:#475569; }
+    .upload-btn-gallery:hover { background:#f1f5f9; }
+
+    /* ===== 云端状态 ===== */
+    #cloudStatus { transition:all .3s ease; }
+    .cloud-dot { width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px; }
+    @keyframes pulseDot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.8)} }
+    .cloud-dot.syncing { animation:pulseDot .8s ease-in-out infinite; }
+    #offlineBar { transition:all .3s; }
+
+    /* ===== 产品名称组合框 ===== */
+    .product-combo-select { width:100%;padding:8px 12px;border-radius:8px;border:1px solid #d1d5db;font-size:14px;background:#fff;outline:none; }
+    .product-combo-select:focus { ring:2px solid #60a5fa; border-color:#60a5fa; }
+  </style>
+</head>
+<body>
+
+<!-- ===== 密码遮罩 ===== -->
+<div id="pwMask" class="hidden">
+  <div class="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm mx-4 text-center">
+    <div class="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+      <svg class="w-7 h-7 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+      </svg>
+    </div>
+    <h2 class="text-lg font-bold text-gray-800 mb-1">管理员后台</h2>
+    <p class="text-gray-500 text-sm mb-5">请输入访问密码</p>
+    <input type="password" id="pwInput" placeholder="输入密码后按 Enter"
+      class="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none mb-3"
+      onkeydown="if(event.key==='Enter')verifyPassword()" />
+    <p id="pwError" class="text-red-500 text-xs mb-3 hidden">密码错误，请重试</p>
+    <button onclick="verifyPassword()" class="w-full py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-sm">进入管理后台</button>
+  </div>
+</div>
+
+<!-- ===== 顶部导航栏 ===== -->
+<header class="bg-gradient-to-r from-blue-900 to-blue-700 text-white shadow-lg sticky top-0 z-50">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 bg-white bg-opacity-20 rounded-lg flex items-center justify-center shrink-0">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-base sm:text-lg font-bold leading-tight">返工返修数据管理系统</h1>
+        <p class="text-blue-200 text-xs" id="headerSubtitle">加载中...</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <div id="cloudStatus" class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-white bg-opacity-15">
+        <span class="cloud-dot bg-gray-400" id="cloudDot"></span>
+        <span id="cloudStatusText">本地模式</span>
+      </div>
+      <span id="modeBadge" class="hidden sm:inline-flex items-center px-2 py-1 rounded-full text-xs font-medium"></span>
+      <a id="switchModeBtn" href="" class="text-blue-200 hover:text-white text-xs underline hidden no-print"></a>
+    </div>
+  </div>
+</header>
+
+<!-- ===== 离线队列提示条 ===== -->
+<div id="offlineBar" class="hidden bg-yellow-500 text-white text-xs text-center py-2 px-4 sticky top-14 z-40 no-print">
+  ⚠️ 网络离线，数据已暂存本地。
+  <button onclick="syncOfflineQueue()" class="ml-3 underline font-semibold">立即同步</button>
+  <span id="offlineCount" class="ml-2 bg-white text-yellow-700 px-1.5 py-0.5 rounded-full font-bold">0</span> 条待同步
+</div>
+
+<!-- ===== Toast ===== -->
+<div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-[150] bg-gray-800 text-white px-5 py-2.5 rounded-xl shadow-xl text-sm opacity-0 pointer-events-none select-none max-w-xs text-center"></div>
+
+<!-- ===== 主内容区 ===== -->
+<main id="app" class="max-w-7xl mx-auto px-4 py-5"></main>
+
+<!-- ===== 行详情侧边面板 ===== -->
+<div id="detailPanel" class="hidden-panel fixed top-0 right-0 h-full w-full sm:w-96 bg-white shadow-2xl z-40 overflow-y-auto">
+  <div class="flex items-center justify-between p-4 border-b bg-gray-50 sticky top-0">
+    <h3 class="text-sm font-bold text-gray-800">📄 记录详情</h3>
+    <button onclick="closeDetailPanel()" class="w-8 h-8 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-500">✕</button>
+  </div>
+  <div id="detailContent" class="p-5"></div>
+</div>
+<div id="detailOverlay" onclick="closeDetailPanel()" class="hidden fixed inset-0 bg-black bg-opacity-30 z-30"></div>
+
+<!-- ===== 编辑弹窗 ===== -->
+<div id="editModal" class="modal-enter hidden fixed inset-0 bg-black bg-opacity-40 z-50 flex items-center justify-center p-4">
+  <div class="modal-box-enter bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between p-5 border-b">
+      <h3 class="text-base font-bold text-gray-800" id="editModalTitle">编辑记录</h3>
+      <button onclick="closeEditModal()" class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500">✕</button>
+    </div>
+    <div id="editModalBody" class="p-5"></div>
+    <div class="flex justify-end gap-3 p-5 border-t">
+      <button onclick="closeEditModal()" class="px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm">取消</button>
+      <button onclick="saveEditRecord()" class="px-5 py-2 rounded-lg bg-blue-700 text-white hover:bg-blue-800 text-sm font-medium">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 确认弹窗 ===== -->
+<div id="confirmModal" class="modal-enter hidden fixed inset-0 bg-black bg-opacity-40 z-50 flex items-center justify-center p-4">
+  <div class="modal-box-enter bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+    <div class="flex items-start gap-3 mb-5">
+      <div class="w-10 h-10 shrink-0 rounded-full bg-red-100 flex items-center justify-center mt-0.5">
+        <svg class="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        </svg>
+      </div>
+      <div>
+        <h3 class="text-base font-bold text-gray-800 mb-1">确认操作</h3>
+        <p class="text-gray-500 text-sm leading-relaxed" id="confirmMsg">确定？</p>
+      </div>
+    </div>
+    <div class="flex justify-end gap-3">
+      <button onclick="closeConfirmModal()" class="px-4 py-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm">取消</button>
+      <button id="confirmOkBtn" class="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 text-sm font-medium">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 二维码扫描器 ===== -->
+<div id="qrModal" class="hidden">
+  <div class="flex items-center justify-between px-4 py-3 bg-black bg-opacity-60 relative z-10">
+    <div>
+      <p class="text-white font-semibold text-sm">📷 扫描二维码 / 条形码</p>
+      <p class="text-green-300 text-xs mt-0.5">扫码内容将自动填入「批次号」</p>
+    </div>
+    <button onclick="stopQRScanner()" class="w-9 h-9 rounded-full bg-white bg-opacity-20 text-white flex items-center justify-center text-lg">✕</button>
+  </div>
+  <div class="flex-1 relative overflow-hidden">
+    <video id="qrVideo" autoplay playsinline muted class="w-full h-full object-cover"></video>
+    <canvas id="qrCanvas" class="hidden absolute top-0 left-0"></canvas>
+    <div class="qr-overlay pointer-events-none"></div>
+    <div class="qr-frame pointer-events-none" id="qrFrame">
+      <div class="qr-frame-inner"></div>
+      <div class="scan-line"></div>
+    </div>
+    <div class="absolute bottom-0 left-0 right-0 pb-6 flex flex-col items-center gap-2 pointer-events-none">
+      <p id="qrStatus" class="bg-black bg-opacity-50 text-white text-xs px-4 py-1.5 rounded-full">正在启动摄像头...</p>
+    </div>
+  </div>
+  <div class="px-4 py-4 bg-black bg-opacity-60 flex gap-3">
+    <button onclick="stopQRScanner()" class="flex-1 py-3 border border-white border-opacity-30 text-white rounded-xl text-sm">取消</button>
+    <button id="qrTorchBtn" onclick="toggleTorch()" class="flex-1 py-3 border border-white border-opacity-30 text-white rounded-xl text-sm hidden">🔦 手电筒</button>
+  </div>
+</div>
+
+<!-- ===== Lightbox ===== -->
+<div id="lightbox" class="hidden" onclick="closeLightbox()">
+  <img id="lightboxImg" src="" alt="" onclick="event.stopPropagation()" />
+  <button id="lightboxClose" onclick="closeLightbox()">✕</button>
+  <p id="lightboxCaption"></p>
+</div>
+
+<script>
+/* ============================================================
+   模块一：常量 & 默认配置
+   ============================================================ */
+const LS_KEY         = 'rework_records_v1';
+const LS_CONFIG_KEY  = 'rework_config_v1';
+const LS_MEMORY_KEY  = 'rework_memory_v1';
+const LS_CLOUD_KEY   = 'rework_cloud_config_v1';
+const LS_OFFLINE_KEY = 'rework_offline_queue_v1';
+const PAGE_SIZES     = [10, 20, 50, 100];
+const MAX_PHOTOS     = 3;
+const PHOTO_MAX_PX   = 1024;
+const PHOTO_QUALITY  = 0.72;
+const POLL_INTERVAL  = 5000;
+
+const DEFAULT_CONFIG = {
+  companyName: '某某制造有限公司',
+  adminPassword: '',
+  productOptions: [],           // ★ 产品名称预设列表（可自定义创建）
+  defectTypeOptions: ['尺寸超差','外观不良','装配不良','性能不达标','材料缺陷','焊接不良','涂装不良','其他'],
+  disposeOptions: ['返工','返修','报废','让步接收','退供应商'],
+};
+
+/* ============================================================
+   模块二：系统配置读写
+   ============================================================ */
+function getConfig() {
+  try { const r=localStorage.getItem(LS_CONFIG_KEY); return r?{...DEFAULT_CONFIG,...JSON.parse(r)}:{...DEFAULT_CONFIG}; }
+  catch { return {...DEFAULT_CONFIG}; }
+}
+function saveConfig(cfg) { localStorage.setItem(LS_CONFIG_KEY, JSON.stringify(cfg)); }
+
+/* ============================================================
+   模块三：云端配置（内置 Supabase 连接信息）
+   ============================================================ */
+const DEFAULT_CLOUD_CONFIG = {
+  url: 'https://ynjsikdgdtwjmghwpskn.supabase.co',
+  key: 'sb_publishable_Hak3r9PjOEh6Rx6tUt_iww_-waqXghT',
+};
+function getCloudConfig() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LS_CLOUD_KEY) || '{}');
+    return (s.url && s.key) ? s : DEFAULT_CLOUD_CONFIG;
+  } catch { return DEFAULT_CLOUD_CONFIG; }
+}
+function saveCloudConfig(cfg) { localStorage.setItem(LS_CLOUD_KEY, JSON.stringify(cfg)); }
+
+/* ============================================================
+   模块四：CloudDB — 数据访问抽象层
+   ============================================================ */
+const FIELD_TO_DB = {
+  productName:'product_name', batchNo:'batch_no',
+  defectType:'defect_type', workHours:'work_hours',
+  createdAt:'created_at', updatedAt:'updated_at',
+};
+const DB_TO_FIELD = Object.fromEntries(Object.entries(FIELD_TO_DB).map(([k,v])=>[v,k]));
+function toDBRow(rec) { const r={}; for(const[k,v] of Object.entries(rec)) r[FIELD_TO_DB[k]||k]=v; return r; }
+function fromDBRow(row) { const r={}; for(const[k,v] of Object.entries(row)) r[DB_TO_FIELD[k]||k]=v; return r; }
+
+const CloudDB = {
+  enabled() { const c=getCloudConfig(); return !!(c.url&&c.key); },
+  headers() {
+    const c=getCloudConfig();
+    return { 'Content-Type':'application/json', 'apikey':c.key, 'Authorization':`Bearer ${c.key}`, 'Prefer':'return=representation' };
+  },
+  base() { return getCloudConfig().url.replace(/\/$/,'')+'/rest/v1/rework_records'; },
+  async _fetch(url,opts={},timeout=10000) {
+    const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),timeout);
+    try { const r=await fetch(url,{...opts,signal:ctrl.signal}); clearTimeout(t); return r; }
+    catch(e) { clearTimeout(t); throw e; }
+  },
+  async getAll() {
+    if(!this.enabled()) return getAllRecordsLocal();
+    try {
+      setCloudStatus('syncing');
+      const res=await this._fetch(this.base()+'?order=created_at.desc&limit=2000',{headers:this.headers()});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      setCloudStatus('ok');
+      return (await res.json()).map(fromDBRow);
+    } catch(e) { setCloudStatus('error'); return getAllRecordsLocal(); }
+  },
+  async add(rec) {
+    if(!this.enabled()) return addRecordLocal(rec);
+    try {
+      setCloudStatus('syncing');
+      const res=await this._fetch(this.base(),{method:'POST',headers:this.headers(),body:JSON.stringify(toDBRow(rec))});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      setCloudStatus('ok');
+      const rows=await res.json(); return fromDBRow(Array.isArray(rows)?rows[0]:rows);
+    } catch(e) {
+      setCloudStatus('error'); addToOfflineQueue({action:'add',rec}); addRecordLocal(rec); return rec;
+    }
+  },
+  async update(id,patch) {
+    if(!this.enabled()) return updateRecordLocal(id,patch);
+    try {
+      setCloudStatus('syncing');
+      const res=await this._fetch(this.base()+`?id=eq.${encodeURIComponent(id)}`,{method:'PATCH',headers:this.headers(),body:JSON.stringify(toDBRow(patch))});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      setCloudStatus('ok'); return true;
+    } catch(e) { setCloudStatus('error'); return updateRecordLocal(id,patch); }
+  },
+  async delete(id) {
+    if(!this.enabled()) return deleteRecordLocal(id);
+    try {
+      setCloudStatus('syncing');
+      const res=await this._fetch(this.base()+`?id=eq.${encodeURIComponent(id)}`,{method:'DELETE',headers:this.headers()});
+      if(!res.ok) throw new Error('HTTP '+res.status); setCloudStatus('ok');
+    } catch(e) { setCloudStatus('error'); deleteRecordLocal(id); }
+  },
+  async deleteMany(ids) {
+    if(!this.enabled()) return deleteManyRecordsLocal(ids);
+    try {
+      setCloudStatus('syncing');
+      const ic=ids.map(id=>encodeURIComponent(id)).join(',');
+      const res=await this._fetch(this.base()+`?id=in.(${ic})`,{method:'DELETE',headers:this.headers()});
+      if(!res.ok) throw new Error('HTTP '+res.status); setCloudStatus('ok');
+    } catch(e) { setCloudStatus('error'); deleteManyRecordsLocal(ids); }
+  },
+  async testConnection(url,key) {
+    try {
+      const res=await this._fetch(url.replace(/\/$/,'')+'/rest/v1/rework_records?limit=1',{headers:{'apikey':key,'Authorization':`Bearer ${key}`}},8000);
+      if([200,404,406].includes(res.status)) return {ok:true};
+      return {ok:false,msg:`HTTP ${res.status}`};
+    } catch(e) { return {ok:false,msg:e.name==='AbortError'?'连接超时':e.message}; }
+  },
+};
+
+/* ============================================================
+   模块五：本地 LocalStorage CRUD（回退层）
+   ============================================================ */
+function getAllRecordsLocal() { try { return JSON.parse(localStorage.getItem(LS_KEY)||'[]'); } catch { return []; } }
+function saveAllRecordsLocal(list) { localStorage.setItem(LS_KEY, JSON.stringify(list)); }
+function addRecordLocal(rec) {
+  const list=getAllRecordsLocal();
+  if(!rec.id) rec.id='R'+Date.now()+String(Math.floor(Math.random()*1000)).padStart(3,'0');
+  if(!rec.createdAt) rec.createdAt=new Date().toISOString();
+  list.push(rec); saveAllRecordsLocal(list); return rec;
+}
+function updateRecordLocal(id,patch) {
+  const list=getAllRecordsLocal(); const idx=list.findIndex(r=>r.id===id); if(idx===-1)return false;
+  list[idx]={...list[idx],...patch,updatedAt:new Date().toISOString()}; saveAllRecordsLocal(list); return true;
+}
+function deleteRecordLocal(id) { saveAllRecordsLocal(getAllRecordsLocal().filter(r=>r.id!==id)); }
+function deleteManyRecordsLocal(ids) { const s=new Set(ids); saveAllRecordsLocal(getAllRecordsLocal().filter(r=>!s.has(r.id))); }
+
+/** 多条件筛选（不含 dept/reason） */
+function filterRecords(list, f) {
+  return list.filter(r => {
+    const s=v=>(v||'');
+    if(f.defectType && s(r.defectType)!==f.defectType) return false;
+    if(f.dispose    && s(r.dispose)   !==f.dispose)    return false;
+    if(f.operator   && !s(r.operator).includes(f.operator)) return false;
+    if(f.dateFrom   && s(r.date)<f.dateFrom) return false;
+    if(f.dateTo     && s(r.date)>f.dateTo)   return false;
+    if(f.keyword) {
+      const kw=f.keyword.toLowerCase();
+      if(!(s(r.productName)+s(r.batchNo)+s(r.operator)+s(r.remark)).toLowerCase().includes(kw)) return false;
+    }
+    return true;
+  });
+}
+
+/* ============================================================
+   模块六：离线队列
+   ============================================================ */
+function getOfflineQueue() { try { return JSON.parse(localStorage.getItem(LS_OFFLINE_KEY)||'[]'); } catch { return []; } }
+function saveOfflineQueue(q) { localStorage.setItem(LS_OFFLINE_KEY, JSON.stringify(q)); }
+function addToOfflineQueue(item) { const q=getOfflineQueue(); q.push(item); saveOfflineQueue(q); updateOfflineBar(); }
+function updateOfflineBar() {
+  const q=getOfflineQueue(),bar=document.getElementById('offlineBar'),cnt=document.getElementById('offlineCount');
+  if(!bar)return; if(q.length>0){bar.classList.remove('hidden');if(cnt)cnt.textContent=q.length;}else bar.classList.add('hidden');
+}
+async function syncOfflineQueue() {
+  const q=getOfflineQueue(); if(!q.length){showToast('无待同步记录','info');return;}
+  if(!CloudDB.enabled()){showToast('请先配置云端连接','warn');return;}
+  let ok=0,fail=0; const remaining=[];
+  for(const item of q) {
+    try {
+      if(item.action==='add') {
+        const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(item.rec))});
+        if(res.ok){ok++;deleteRecordLocal(item.rec.id);}else{remaining.push(item);fail++;}
+      }
+    } catch{remaining.push(item);fail++;}
+  }
+  saveOfflineQueue(remaining); updateOfflineBar();
+  showToast(ok>0?`同步完成：${ok}条成功${fail>0?'，'+fail+'条失败':''}`:'同步失败，请检查网络',ok>0?'success':'error');
+  if(ok>0)refreshTable();
+}
+
+/* ============================================================
+   模块七：云端状态指示器
+   ============================================================ */
+let _lastCloudStatus='';
+function setCloudStatus(status) {
+  if(!CloudDB.enabled())status='local';
+  if(status===_lastCloudStatus)return; _lastCloudStatus=status;
+  const dot=document.getElementById('cloudDot'),text=document.getElementById('cloudStatusText');
+  if(!dot||!text)return;
+  const map={local:{cls:'bg-gray-400',label:'💾 本地模式'},ok:{cls:'bg-green-400',label:'☁️ 云端同步'},syncing:{cls:'bg-blue-400 syncing',label:'🔄 同步中'},error:{cls:'bg-red-400',label:'⚠️ 连接异常'}};
+  const s=map[status]||map.local; dot.className=`cloud-dot ${s.cls}`; text.textContent=s.label;
+}
+
+/* ============================================================
+   模块八：实时轮询
+   ============================================================ */
+let _pollTimer=null;
+function startPolling() {
+  if(!CloudDB.enabled()||_pollTimer)return;
+  _pollTimer=setInterval(async()=>{
+    if(document.hidden)return;
+    if(_adminTab==='list')  await refreshTable(true);
+    if(_adminTab==='stats') await updateCharts();
+  },POLL_INTERVAL);
+}
+function stopPolling() { clearInterval(_pollTimer); _pollTimer=null; }
+
+/* ============================================================
+   模块九：字段记忆（仅记忆操作员）
+   ============================================================ */
+function getMemory() { try { return JSON.parse(localStorage.getItem(LS_MEMORY_KEY)||'{}'); } catch { return {}; } }
+function saveMemory(p) { localStorage.setItem(LS_MEMORY_KEY, JSON.stringify({...getMemory(),...p})); }
+
+/* ============================================================
+   模块十：Toast 通知
+   ============================================================ */
+let _toastTimer=null;
+function showToast(msg,type='success') {
+  const el=document.getElementById('toast');
+  const cls={success:'bg-green-700',error:'bg-red-700',info:'bg-gray-700',warn:'bg-yellow-600'};
+  el.className=`fixed top-16 left-1/2 -translate-x-1/2 z-[150] ${cls[type]||cls.info} text-white px-5 py-2.5 rounded-xl shadow-xl text-sm max-w-xs text-center`;
+  el.textContent=msg; el.style.opacity='1'; el.style.pointerEvents='auto';
+  clearTimeout(_toastTimer); _toastTimer=setTimeout(()=>{el.style.opacity='0';el.style.pointerEvents='none';},2800);
+}
+
+/* ============================================================
+   模块十一：工具函数
+   ============================================================ */
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/* ============================================================
+   模块十二：图片压缩
+   ============================================================ */
+function compressImage(file,maxPx=PHOTO_MAX_PX,quality=PHOTO_QUALITY) {
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader(); reader.onerror=reject;
+    reader.onload=e=>{
+      const img=new Image(); img.onerror=reject;
+      img.onload=()=>{
+        let w=img.naturalWidth,h=img.naturalHeight;
+        if(w>maxPx||h>maxPx){if(w>=h){h=Math.round(h*maxPx/w);w=maxPx;}else{w=Math.round(w*maxPx/h);h=maxPx;}}
+        const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+        const ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h);
+        ctx.drawImage(img,0,0,w,h); resolve(cv.toDataURL('image/jpeg',quality));
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ============================================================
+   模块十三：照片管理
+   ============================================================ */
+let _photos=[];
+async function addPhotoFromInput(input) {
+  const files=Array.from(input.files||[]); if(!files.length)return;
+  const remain=MAX_PHOTOS-_photos.length;
+  if(remain<=0){showToast(`最多${MAX_PHOTOS}张`,'warn');input.value='';return;}
+  showToast('照片处理中...','info'); let cnt=0;
+  for(const file of files.slice(0,remain)){
+    if(!file.type.startsWith('image/'))continue;
+    try{_photos.push({dataUrl:await compressImage(file),name:file.name||'照片'});cnt++;}catch(e){console.warn(e);}
+  }
+  input.value=''; renderPhotoPreview(); if(cnt>0)showToast(`已添加${cnt}张`,'success');
+}
+function removePhoto(idx){_photos.splice(idx,1);renderPhotoPreview();}
+function renderPhotoPreview(){
+  const el=document.getElementById('photoPreview'); if(!el)return;
+  let html='';
+  _photos.forEach((p,i)=>{html+=`<div class="photo-thumb-wrap" onclick="openLightbox('${esc(p.dataUrl)}','${esc(p.name)}',${i+1},${_photos.length})"><img src="${p.dataUrl}" alt="${esc(p.name)}" loading="lazy"/><button class="photo-del-btn no-print" onclick="event.stopPropagation();removePhoto(${i})">✕</button></div>`;});
+  if(_photos.length<MAX_PHOTOS){const r=MAX_PHOTOS-_photos.length;html+=`<label class="photo-add-slot no-print"><span class="text-2xl">📷</span><span>添加照片</span><span style="font-size:10px">还可加${r}张</span><input type="file" accept="image/*" multiple class="hidden" onchange="addPhotoFromInput(this);updatePhotoCount()"/></label>`;}
+  el.innerHTML=html;
+}
+
+/* ============================================================
+   模块十四：Lightbox
+   ============================================================ */
+function openLightbox(src,name='',idx=1,total=1){
+  document.getElementById('lightboxImg').src=src;
+  document.getElementById('lightboxCaption').textContent=total>1?`${idx}/${total}`:'';
+  document.getElementById('lightbox').classList.remove('hidden'); document.body.style.overflow='hidden';
+}
+function closeLightbox(){document.getElementById('lightbox').classList.add('hidden');document.getElementById('lightboxImg').src='';document.body.style.overflow='';}
+
+/* ============================================================
+   ★ 模块十五：二维码扫描器（扫码内容填入批次号）
+   ============================================================ */
+let _qrStream=null,_qrAnimReq=null,_qrTrack=null,_torchOn=false;
+async function openQRScanner(){
+  const modal=document.getElementById('qrModal'),video=document.getElementById('qrVideo');
+  const canvas=document.getElementById('qrCanvas'),status=document.getElementById('qrStatus');
+  modal.classList.remove('hidden');
+  if(!navigator.mediaDevices?.getUserMedia){status.textContent='⚠️ 浏览器不支持摄像头';return;}
+  try{
+    status.textContent='正在启动摄像头...';
+    _qrStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+    video.srcObject=_qrStream; _qrTrack=_qrStream.getVideoTracks()[0];
+    const cap=_qrTrack.getCapabilities?.()||{};
+    if(cap.torch)document.getElementById('qrTorchBtn').classList.remove('hidden');
+    video.onloadedmetadata=()=>{
+      video.play(); canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+      status.textContent='对准二维码 / 条形码进行扫描';
+      _qrAnimReq=requestAnimationFrame(()=>qrScanLoop(video,canvas));
+    };
+  }catch(err){
+    status.textContent=err.name==='NotAllowedError'?'⚠️ 请允许摄像头权限':err.name==='NotFoundError'?'⚠️ 未找到摄像头':'⚠️ '+err.message;
+  }
+}
+function qrScanLoop(video,canvas){
+  if(!_qrStream)return;
+  const ctx=canvas.getContext('2d');
+  if(video.readyState===video.HAVE_ENOUGH_DATA){
+    if(canvas.width!==video.videoWidth||canvas.height!==video.videoHeight){canvas.width=video.videoWidth;canvas.height=video.videoHeight;}
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+    const code=jsQR(ctx.getImageData(0,0,canvas.width,canvas.height).data,canvas.width,canvas.height,{inversionAttempts:'dontInvert'});
+    if(code?.data){handleQRResult(code.data);return;}
+  }
+  _qrAnimReq=requestAnimationFrame(()=>qrScanLoop(video,canvas));
+}
+
+/** ★ 扫码结果 → 直接填入批次号 */
+function handleQRResult(raw){
+  const frame=document.getElementById('qrFrame');
+  if(frame)frame.style.borderColor='#4ade80';
+  if(navigator.vibrate)navigator.vibrate([80,50,80]);
+  playBeep();
+  setTimeout(()=>{
+    stopQRScanner();
+    // 扫码内容直接写入批次号字段
+    const el=document.getElementById('form_batchNo');
+    if(el){ el.value=raw.trim().slice(0,30); el.focus(); el.style.borderColor='#4ade80'; el.style.transition='border-color 1s'; setTimeout(()=>el.style.borderColor='',1500); }
+    showToast('扫码成功！内容已填入批次号','success');
+  },300);
+}
+
+function stopQRScanner(){
+  if(_qrAnimReq){cancelAnimationFrame(_qrAnimReq);_qrAnimReq=null;}
+  if(_qrStream){_qrStream.getTracks().forEach(t=>t.stop());_qrStream=null;}
+  const v=document.getElementById('qrVideo'); if(v)v.srcObject=null;
+  document.getElementById('qrModal')?.classList.add('hidden');
+  document.getElementById('qrTorchBtn')?.classList.add('hidden');
+  document.getElementById('qrStatus').textContent='正在启动摄像头...';
+  const f=document.getElementById('qrFrame'); if(f)f.style.borderColor=''; _torchOn=false;
+}
+async function toggleTorch(){if(!_qrTrack)return;_torchOn=!_torchOn;try{await _qrTrack.applyConstraints({advanced:[{torch:_torchOn}]});const b=document.getElementById('qrTorchBtn');if(b)b.textContent=_torchOn?'🔦 关闭手电':'🔦 手电筒';}catch{}}
+function playBeep(){try{const a=new(window.AudioContext||window.webkitAudioContext)();const o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.type='sine';o.frequency.value=880;g.gain.setValueAtTime(.3,a.currentTime);g.gain.exponentialRampToValueAtTime(.001,a.currentTime+.25);o.start(a.currentTime);o.stop(a.currentTime+.25);}catch{}}
+
+/* ============================================================
+   ★ 模块十六：产品名称组合框（单选 + 自定义创建）
+   ============================================================ */
+
+/** 产品名称下拉 + 新增 HTML */
+function buildProductField(vals={}, prefix='form') {
+  const cfg = getConfig();
+  const opts = cfg.productOptions || [];
+  const cur = vals.productName || '';
+  // 如果当前值不在列表里且非空，显示新增区域
+  const notInList = cur && !opts.includes(cur);
+  return `
+  <div>
+    <label class="block text-xs font-semibold text-gray-600 mb-1">产品名称 <span class="text-red-500">*</span></label>
+    <select id="${prefix}_productSelect" onchange="onProductSelectChange('${prefix}')"
+      class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm bg-white">
+      <option value="">请选择或新增产品</option>
+      ${opts.map(p=>`<option value="${esc(p)}" ${cur===p?'selected':''}>${esc(p)}</option>`).join('')}
+      <option value="__new__" ${notInList?'selected':''}>✏️ 新增产品名称...</option>
+    </select>
+    <input type="hidden" id="${prefix}_productName" value="${esc(cur)}"/>
+    <div id="${prefix}_newProductArea" class="${notInList?'':'hidden'} mt-2 flex gap-2">
+      <input type="text" id="${prefix}_newProductInput" value="${notInList?esc(cur):''}"
+        placeholder="输入新产品名称后点保存"
+        oninput="document.getElementById('${prefix}_productName').value=this.value.trim()"
+        class="flex-1 px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+      <button type="button" onclick="saveNewProduct('${prefix}')"
+        class="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium shrink-0 transition-colors">
+        ＋ 保存
+      </button>
+    </div>
+    ${opts.length===0?`<p class="text-xs text-gray-400 mt-1">💡 选择「新增」输入名称并保存，下次可直接选择</p>`:''}
+  </div>`;
+}
+
+/** 下拉变化处理 */
+function onProductSelectChange(prefix) {
+  const sel = document.getElementById(`${prefix}_productSelect`);
+  const hidden = document.getElementById(`${prefix}_productName`);
+  const area = document.getElementById(`${prefix}_newProductArea`);
+  const input = document.getElementById(`${prefix}_newProductInput`);
+  if(sel.value==='__new__') {
+    area.classList.remove('hidden');
+    hidden.value = '';
+    setTimeout(()=>input?.focus(), 50);
+  } else {
+    area.classList.add('hidden');
+    hidden.value = sel.value;
+    if(input) input.value = '';
+  }
+}
+
+/** 保存新产品名称到配置 */
+function saveNewProduct(prefix) {
+  const input = document.getElementById(`${prefix}_newProductInput`);
+  const hidden = document.getElementById(`${prefix}_productName`);
+  const name = (input?.value||'').trim();
+  if(!name){showToast('请输入产品名称','error');return;}
+  if(name.length>50){showToast('产品名称最多50个字符','error');return;}
+
+  const cfg = getConfig();
+  if(!cfg.productOptions.includes(name)) {
+    cfg.productOptions.push(name);
+    saveConfig(cfg);
+  }
+
+  // 更新下拉框，添加新选项
+  const sel = document.getElementById(`${prefix}_productSelect`);
+  if(sel) {
+    const exists = Array.from(sel.options).some(o=>o.value===name);
+    if(!exists) {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      // 插入到 "新增..." 选项之前
+      sel.insertBefore(opt, sel.lastElementChild);
+    }
+    sel.value = name;
+  }
+  hidden.value = name;
+  document.getElementById(`${prefix}_newProductArea`)?.classList.add('hidden');
+  if(input)input.value='';
+  showToast(`"${name}" 已保存到产品列表`, 'success');
+}
+
+/** 不良类型下拉 + 自定义新增（与产品名称逻辑相同） */
+function buildDefectTypeField(vals={}, prefix='form') {
+  const cfg = getConfig();
+  const opts = cfg.defectTypeOptions || [];
+  const cur = vals.defectType || '';
+  const notInList = cur && !opts.includes(cur);
+  return `
+  <div>
+    <label class="block text-xs font-semibold text-gray-600 mb-1">不良类型 <span class="text-red-500">*</span></label>
+    <select id="${prefix}_defectTypeSelect" onchange="onDefectTypeSelectChange('${prefix}')"
+      class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm bg-white">
+      <option value="">请选择或新增类型</option>
+      ${opts.map(p=>`<option value="${esc(p)}" ${cur===p?'selected':''}>${esc(p)}</option>`).join('')}
+      <option value="__new__" ${notInList?'selected':''}>✏️ 新增不良类型...</option>
+    </select>
+    <input type="hidden" id="${prefix}_defectType" value="${esc(cur)}"/>
+    <div id="${prefix}_newDefectArea" class="${notInList?'':'hidden'} mt-2 flex gap-2">
+      <input type="text" id="${prefix}_newDefectInput" value="${notInList?esc(cur):''}"
+        placeholder="输入新不良类型后点保存"
+        oninput="document.getElementById('${prefix}_defectType').value=this.value.trim()"
+        class="flex-1 px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+      <button type="button" onclick="saveNewDefectType('${prefix}')"
+        class="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-medium shrink-0 transition-colors">
+        ＋ 保存
+      </button>
+    </div>
+  </div>`;
+}
+
+function onDefectTypeSelectChange(prefix) {
+  const sel    = document.getElementById(`${prefix}_defectTypeSelect`);
+  const hidden = document.getElementById(`${prefix}_defectType`);
+  const area   = document.getElementById(`${prefix}_newDefectArea`);
+  const input  = document.getElementById(`${prefix}_newDefectInput`);
+  if (sel.value === '__new__') {
+    area.classList.remove('hidden');
+    hidden.value = '';
+    setTimeout(() => input?.focus(), 50);
+  } else {
+    area.classList.add('hidden');
+    hidden.value = sel.value;
+    if (input) input.value = '';
+  }
+}
+
+function saveNewDefectType(prefix) {
+  const input  = document.getElementById(`${prefix}_newDefectInput`);
+  const hidden = document.getElementById(`${prefix}_defectType`);
+  const name   = (input?.value || '').trim();
+  if (!name) { showToast('请输入不良类型名称', 'error'); return; }
+  if (name.length > 30) { showToast('名称最多30个字符', 'error'); return; }
+
+  const cfg = getConfig();
+  if (!cfg.defectTypeOptions.includes(name)) {
+    cfg.defectTypeOptions.push(name);
+    saveConfig(cfg);
+  }
+
+  const sel = document.getElementById(`${prefix}_defectTypeSelect`);
+  if (sel) {
+    const exists = Array.from(sel.options).some(o => o.value === name);
+    if (!exists) {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      sel.insertBefore(opt, sel.lastElementChild); // 插在"新增..."之前
+    }
+    sel.value = name;
+  }
+  hidden.value = name;
+  document.getElementById(`${prefix}_newDefectArea`)?.classList.add('hidden');
+  if (input) input.value = '';
+  showToast(`"${name}" 已保存到不良类型列表`, 'success');
+}
+
+/* ============================================================
+   ★ 模块十七：表单字段构建（已移除：部门、不良原因、处理工时）
+   ============================================================ */
+function buildFormFields(vals={}, prefix='form') {
+  const cfg = getConfig();
+  const sO = (arr,cur) => arr.map(v=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(v)}</option>`).join('');
+  return `
+  <!-- 第一行：日期 + 操作员 -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+    <div>
+      <label class="block text-xs font-semibold text-gray-600 mb-1">发生日期 <span class="text-red-500">*</span></label>
+      <input type="date" id="${prefix}_date" value="${esc(vals.date||'')}"
+        class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm"/>
+    </div>
+    <div>
+      <label class="block text-xs font-semibold text-gray-600 mb-1">操作员 <span class="text-red-500">*</span></label>
+      <input type="text" id="${prefix}_operator" placeholder="姓名" value="${esc(vals.operator||'')}" maxlength="20"
+        class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm"/>
+    </div>
+  </div>
+
+  <!-- 第二行：产品名称（单选+自定义）+ 批次号（扫码填入） -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+    ${buildProductField(vals, prefix)}
+    <div>
+      <label class="block text-xs font-semibold text-gray-600 mb-1">
+        产品批次号
+        <span class="ml-1 text-green-600 text-xs font-normal">← 扫码自动填入</span>
+      </label>
+      <input type="text" id="${prefix}_batchNo" placeholder="扫码或手动输入" value="${esc(vals.batchNo||'')}" maxlength="30"
+        class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm"/>
+    </div>
+  </div>
+
+  <!-- 第三行：不良数量 + 不良类型 -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+    <div>
+      <label class="block text-xs font-semibold text-gray-600 mb-1">不良数量（件）<span class="text-red-500">*</span></label>
+      <input type="number" id="${prefix}_qty" placeholder="0" value="${esc(String(vals.qty||''))}" min="1"
+        class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm"/>
+    </div>
+    ${buildDefectTypeField(vals, prefix)}
+  </div>
+
+  <!-- 第四行：处置方式（单列宽） -->
+  <div class="mb-4">
+    <label class="block text-xs font-semibold text-gray-600 mb-1">处置方式 <span class="text-red-500">*</span></label>
+    <select id="${prefix}_dispose" class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm bg-white">
+      <option value="">请选择</option>${sO(cfg.disposeOptions,vals.dispose)}
+    </select>
+  </div>
+
+  <!-- 备注 -->
+  <div>
+    <label class="block text-xs font-semibold text-gray-600 mb-1">备注</label>
+    <textarea id="${prefix}_remark" rows="2" placeholder="补充说明..." maxlength="200"
+      class="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-400 focus:outline-none text-sm resize-none">${esc(vals.remark||'')}</textarea>
+  </div>`;
+}
+
+/** 读取并校验表单字段 */
+function readFormFields(prefix='form') {
+  const v = f => (document.getElementById(`${prefix}_${f}`)?.value?.trim()||'');
+  const data = {
+    date:       v('date'),
+    productName:v('productName'),  // 来自隐藏域
+    batchNo:    v('batchNo'),
+    qty:        v('qty'),
+    operator:   v('operator'),
+    defectType: v('defectType'),
+    dispose:    v('dispose'),
+    remark:     v('remark'),
+    dept: '',   // 保持DB兼容，发送空字符串
+  };
+  for(const[k,lbl] of [['date','发生日期'],['productName','产品名称'],['qty','不良数量'],['operator','操作员'],['defectType','不良类型'],['dispose','处置方式']]) {
+    if(!data[k]) return {ok:false, error:`${lbl} 不能为空`};
+  }
+  if(isNaN(+data.qty)||+data.qty<1) return {ok:false, error:'不良数量必须为正整数'};
+  data.qty=+data.qty;
+  return {ok:true, data};
+}
+
+/* ============================================================
+   模块十八：密码保护
+   ============================================================ */
+let _adminUnlocked=false;
+function checkAdminPassword(){
+  const cfg=getConfig(); if(!cfg.adminPassword){_adminUnlocked=true;return;}
+  if(sessionStorage.getItem('rework_admin_ok')==='1'){_adminUnlocked=true;return;}
+  document.getElementById('pwMask').classList.remove('hidden');
+  setTimeout(()=>document.getElementById('pwInput')?.focus(),100);
+}
+function verifyPassword(){
+  const cfg=getConfig(),val=document.getElementById('pwInput')?.value||'';
+  if(val===cfg.adminPassword){
+    sessionStorage.setItem('rework_admin_ok','1'); _adminUnlocked=true;
+    document.getElementById('pwMask').classList.add('hidden'); renderAdminPage();
+  } else { document.getElementById('pwError').classList.remove('hidden'); document.getElementById('pwInput').value=''; document.getElementById('pwInput').focus(); }
+}
+
+/* ============================================================
+   ★ 模块十九：员工填报页面
+   ============================================================ */
+function renderSubmitPage(){
+  _photos=[];
+  const mem=getMemory();
+  document.getElementById('app').innerHTML=`
+  <div class="max-w-lg mx-auto">
+    <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5 mb-4 flex items-start gap-3">
+      <svg class="w-5 h-5 text-blue-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <p class="text-sm text-blue-700">
+        <b>填报说明：</b>标记 <span class="text-red-500 font-bold">*</span> 为必填。
+        点击「扫码填表」可自动录入批次号。
+        ${CloudDB.enabled()?'<span class="ml-1 text-green-700 font-medium">☁️ 数据实时同步</span>':'<span class="ml-1 text-gray-500">💾 本地存储</span>'}
+      </p>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-4">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-base font-bold text-gray-800 flex items-center gap-2">
+          <span class="w-6 h-6 bg-blue-700 rounded text-white text-xs flex items-center justify-center shrink-0">📋</span>
+          返工返修记录填报
+        </h2>
+        <button onclick="openQRScanner()"
+          class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm font-semibold shadow-sm transition-colors active:scale-95">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+          </svg>
+          扫码填批次
+        </button>
+      </div>
+      <form id="submitForm" onsubmit="handleSubmit(event)" novalidate>
+        ${buildFormFields({operator:mem.operator||''}, 'form')}
+        <div class="flex gap-3 mt-5">
+          <button type="submit" id="submitBtn"
+            class="flex-1 py-3 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-sm transition-colors shadow-sm">
+            ✅ 提交记录
+          </button>
+          <button type="button" onclick="resetSubmitForm()"
+            class="px-5 py-3 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">重置</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- 照片上传 -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-bold text-gray-800">📎 附件照片 <span class="text-xs font-normal text-gray-400 ml-1">最多${MAX_PHOTOS}张</span></h3>
+        <span id="photoCount" class="text-xs text-blue-600 font-medium">0/${MAX_PHOTOS}</span>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <label class="upload-btn upload-btn-camera">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          📷 立即拍照
+          <input type="file" accept="image/*" capture="environment" class="hidden" onchange="addPhotoFromInput(this);updatePhotoCount()"/>
+        </label>
+        <label class="upload-btn upload-btn-gallery">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          🖼 从相册选择
+          <input type="file" accept="image/*" multiple class="hidden" onchange="addPhotoFromInput(this);updatePhotoCount()"/>
+        </label>
+      </div>
+      <div id="photoPreview" class="grid grid-cols-3 gap-2 min-h-[60px]"></div>
+      <p class="text-xs text-gray-400 mt-2.5 text-center">点击缩略图全屏查看 · 图片自动压缩</p>
+    </div>
+
+    <div id="recentSubmits"></div>
+  </div>`;
+
+  const dateEl=document.getElementById('form_date');
+  if(dateEl)dateEl.value=new Date().toISOString().split('T')[0];
+  renderPhotoPreview();
+}
+
+function updatePhotoCount(){const el=document.getElementById('photoCount');if(el)el.textContent=`${_photos.length}/${MAX_PHOTOS}`;}
+
+async function handleSubmit(e){
+  e.preventDefault();
+  const {ok,data,error}=readFormFields('form');
+  if(!ok){showToast(error,'error');return;}
+  const btn=document.getElementById('submitBtn');
+  if(btn){btn.disabled=true;btn.textContent='提交中...';}
+  saveMemory({operator:data.operator});
+  data.photos=_photos.map(p=>({dataUrl:p.dataUrl,name:p.name}));
+  data.id='R'+Date.now()+String(Math.floor(Math.random()*1000)).padStart(3,'0');
+  data.createdAt=new Date().toISOString();
+  const rec=await CloudDB.add(data);
+  if(btn){btn.disabled=false;btn.textContent='✅ 提交记录';}
+  showToast(CloudDB.enabled()?'提交成功！数据已同步到云端':'提交成功！','success');
+  _photos=[]; resetSubmitForm(); renderRecentSubmits(rec); updatePhotoCount();
+}
+
+function resetSubmitForm(){
+  const today=new Date().toISOString().split('T')[0];
+  const mem=getMemory();
+  ['date','batchNo','qty','operator','defectType','dispose','remark'].forEach(f=>{
+    const el=document.getElementById('form_'+f); if(!el)return;
+    if(f==='date')el.value=today;
+    else if(f==='operator'&&mem.operator)el.value=mem.operator;
+    else el.value='';
+  });
+  // 重置产品选择
+  const sel=document.getElementById('form_productSelect');
+  const hidden=document.getElementById('form_productName');
+  const area=document.getElementById('form_newProductArea');
+  if(sel)sel.value=''; if(hidden)hidden.value=''; if(area)area.classList.add('hidden');
+  // 重置不良类型选择
+  const dSel=document.getElementById('form_defectTypeSelect');
+  const dArea=document.getElementById('form_newDefectArea');
+  if(dSel)dSel.value=''; if(dArea)dArea.classList.add('hidden');
+  _photos=[]; renderPhotoPreview(); updatePhotoCount();
+}
+
+let _recentList=[];
+function renderRecentSubmits(newRec){
+  if(newRec)_recentList.unshift(newRec);
+  if(_recentList.length>5)_recentList=_recentList.slice(0,5);
+  const el=document.getElementById('recentSubmits'); if(!el||!_recentList.length)return;
+  el.innerHTML=`
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+    <h3 class="text-sm font-semibold text-gray-600 mb-3">✅ 本次已提交（最近5条）</h3>
+    <div class="space-y-2">
+      ${_recentList.map(r=>`
+        <div class="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          <span class="text-sm text-gray-700">
+            <b>${esc(r.productName)}</b> · <span class="text-red-600 font-bold">${r.qty}</span>件 · ${esc(r.defectType)}
+            ${r.batchNo?`<span class="text-gray-400 text-xs ml-1">#${esc(r.batchNo)}</span>`:''}
+            ${r.photos?.length?`<span class="ml-1 text-blue-500">📷${r.photos.length}</span>`:''}
+          </span>
+          <span class="text-green-600 font-medium text-xs shrink-0 ml-2">${r.date}</span>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   模块二十：管理后台 Tab 框架
+   ============================================================ */
+let _adminTab='list';
+function renderAdminPage(){
+  if(!_adminUnlocked){checkAdminPassword();return;}
+  document.getElementById('app').innerHTML=`
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 mb-4 overflow-x-auto no-print">
+    <div class="flex min-w-max">
+      ${[{k:'list',icon:'📋',lbl:'数据列表'},{k:'stats',icon:'📊',lbl:'统计图表'},{k:'settings',icon:'⚙️',lbl:'系统设置'}]
+        .map(t=>`<button onclick="switchAdminTab('${t.k}')" class="tab-btn px-6 py-3.5 text-sm font-medium text-gray-500 hover:text-blue-700 whitespace-nowrap flex items-center gap-1.5 ${_adminTab===t.k?'active':''}">
+        ${t.icon} ${t.lbl}</button>`).join('')}
+    </div>
+  </div>
+  <div id="adminTabContent"></div>`;
+  renderAdminTab(); startPolling();
+}
+function switchAdminTab(tab){
+  _adminTab=tab;
+  document.querySelectorAll('.tab-btn').forEach(btn=>btn.classList.toggle('active',btn.getAttribute('onclick').includes(`'${tab}'`)));
+  renderAdminTab();
+}
+function renderAdminTab(){
+  const el=document.getElementById('adminTabContent'); if(!el)return;
+  if(_adminTab==='list')renderListTab(el);
+  else if(_adminTab==='stats')renderStatsTab(el);
+  else if(_adminTab==='settings')renderSettingsTab(el);
+}
+
+/* ============================================================
+   ★ 模块二十一：数据列表 Tab（已移除 dept/reason/workHours 列）
+   ============================================================ */
+let _ls={page:1,pageSize:20,filters:{defectType:'',dispose:'',operator:'',dateFrom:'',dateTo:'',keyword:''},sortKey:'date',sortDir:'desc',selectedIds:new Set()};
+
+function renderListTab(ct){
+  const cfg=getConfig();
+  const sO=(arr,cur,ph)=>`<option value="">${ph}</option>`+arr.map(v=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(v)}</option>`).join('');
+  ct.innerHTML=`
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4 no-print">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <input type="text" id="f_keyword" value="${esc(_ls.filters.keyword)}" placeholder="🔍 关键词" oninput="updateFilter('keyword',this.value)"
+        class="col-span-2 sm:col-span-1 px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+      <select onchange="updateFilter('defectType',this.value)" class="px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none">${sO(cfg.defectTypeOptions,_ls.filters.defectType,'全部类型')}</select>
+      <select onchange="updateFilter('dispose',this.value)" class="px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none">${sO(cfg.disposeOptions,_ls.filters.dispose,'全部处置')}</select>
+      <div class="flex items-center gap-1">
+        <input type="date" value="${_ls.filters.dateFrom}" onchange="updateFilter('dateFrom',this.value)" class="flex-1 px-2 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+        <span class="text-gray-400 text-xs">~</span>
+        <input type="date" value="${_ls.filters.dateTo}" onchange="updateFilter('dateTo',this.value)" class="flex-1 px-2 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+      </div>
+      <button onclick="clearFilters()" class="px-3 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">重置筛选</button>
+    </div>
+  </div>
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-3 no-print">
+    <div id="listSummary" class="text-sm text-gray-600"></div>
+    <div class="flex flex-wrap gap-2">
+      <button onclick="openQuickAdd()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-sm font-medium">➕ 快速新增</button>
+      <button id="batchDelBtn" onclick="batchDelete()" style="display:none" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium">🗑 批量删除 (<span id="batchCount">0</span>)</button>
+      <button onclick="exportCSV()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium">📥 导出 CSV</button>
+      <button onclick="window.print()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium no-print">🖨 打印</button>
+      <button onclick="copySubmitLink()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium">🔗 复制填报链接</button>
+    </div>
+  </div>
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mb-4">
+    <div class="table-wrap">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 border-b border-gray-200"><tr>
+          <th class="px-3 py-3 w-8 no-print"><input type="checkbox" id="checkAll" onchange="toggleSelectAll(this.checked)" class="w-4 h-4 rounded border-gray-300 cursor-pointer"/></th>
+          ${[{k:'date',l:'日期'},{k:'productName',l:'产品名称'},{k:'batchNo',l:'批次号'},{k:'qty',l:'数量'},{k:'defectType',l:'类型'},{k:'dispose',l:'处置'},{k:'operator',l:'操作员'}]
+            .map(c=>`<th class="px-3 py-3 text-left font-semibold text-gray-600 cursor-pointer select-none whitespace-nowrap" onclick="sortBy('${c.k}')">${c.l} <span class="text-gray-400 text-xs">${_ls.sortKey===c.k?(_ls.sortDir==='asc'?'↑':'↓'):'⇅'}</span></th>`).join('')}
+          <th class="px-3 py-3 text-center font-semibold text-gray-600 no-print">操作</th>
+        </tr></thead>
+        <tbody id="tableBody" class="divide-y divide-gray-50"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="hidden py-16 text-center text-gray-400"><div class="text-4xl mb-3">📭</div><p class="text-sm">暂无匹配记录</p></div>
+  </div>
+  <div id="pagination" class="flex flex-wrap items-center justify-between gap-3 no-print"></div>`;
+  refreshTable();
+}
+
+let _refreshing=false;
+async function refreshTable(silent=false){
+  if(_refreshing)return; _refreshing=true;
+  try{
+    const all=await CloudDB.getAll();
+    const filtered=filterRecords(all,_ls.filters);
+    filtered.sort((a,b)=>{
+      let av=a[_ls.sortKey]??'',bv=b[_ls.sortKey]??'';
+      if(_ls.sortKey==='qty'){av=+av;bv=+bv;}
+      if(av<bv)return _ls.sortDir==='asc'?-1:1; if(av>bv)return _ls.sortDir==='asc'?1:-1; return 0;
+    });
+    const total=filtered.length,pageCount=Math.max(1,Math.ceil(total/_ls.pageSize));
+    if(_ls.page>pageCount)_ls.page=pageCount;
+    const start=(_ls.page-1)*_ls.pageSize,pageData=filtered.slice(start,start+_ls.pageSize);
+    const sumQty=filtered.reduce((s,r)=>s+(+r.qty||0),0);
+    const sumEl=document.getElementById('listSummary');
+    if(sumEl)sumEl.innerHTML=`共 <b class="text-blue-700">${total}</b> 条，合计不良 <b class="text-red-600">${sumQty}</b> 件`;
+    const tbody=document.getElementById('tableBody'),emptyEl=document.getElementById('emptyState');
+    if(!tbody){_refreshing=false;return;}
+    if(!pageData.length){tbody.innerHTML='';emptyEl?.classList.remove('hidden');}
+    else{
+      emptyEl?.classList.add('hidden');
+      tbody.innerHTML=pageData.map((r,i)=>`
+        <tr class="${_ls.selectedIds.has(r.id)?'selected-row':(i%2===0?'bg-white':'bg-gray-50')}" data-id="${r.id}" onclick="onRowClick(event,'${r.id}')">
+          <td class="px-3 py-2.5 no-print" onclick="event.stopPropagation()"><input type="checkbox" class="w-4 h-4 rounded border-gray-300 cursor-pointer" ${_ls.selectedIds.has(r.id)?'checked':''} onchange="toggleSelectRow('${r.id}',this.checked)"/></td>
+          <td class="px-3 py-2.5 whitespace-nowrap text-gray-700 text-xs">${esc(r.date)}</td>
+          <td class="px-3 py-2.5 max-w-[120px] truncate font-medium" title="${esc(r.productName)}">${esc(r.productName)}${r.photos?.length?`<span class="text-blue-400 text-xs ml-1">📷${r.photos.length}</span>`:''}</td>
+          <td class="px-3 py-2.5 text-gray-400 text-xs">${esc(r.batchNo||'-')}</td>
+          <td class="px-3 py-2.5 font-bold text-red-600">${r.qty}</td>
+          <td class="px-3 py-2.5 whitespace-nowrap"><span class="px-2 py-0.5 rounded bg-orange-100 text-orange-700 text-xs">${esc(r.defectType)}</span></td>
+          <td class="px-3 py-2.5 whitespace-nowrap"><span class="px-2 py-0.5 rounded ${disposeColor(r.dispose)} text-xs">${esc(r.dispose)}</span></td>
+          <td class="px-3 py-2.5 text-gray-700">${esc(r.operator)}</td>
+          <td class="px-3 py-2.5 text-center whitespace-nowrap no-print" onclick="event.stopPropagation()">
+            <button onclick="openEditModal('${r.id}')" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs mr-1">✏️ 编辑</button>
+            <button onclick="openDeleteConfirm('${r.id}')" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 text-xs">🗑 删除</button>
+          </td>
+        </tr>`).join('');
+    }
+    const allChk=pageData.length>0&&pageData.every(r=>_ls.selectedIds.has(r.id));
+    const ca=document.getElementById('checkAll'); if(ca)ca.checked=allChk;
+    renderPagination(total,pageCount); syncBatchBtn();
+  }finally{_refreshing=false;}
+}
+
+function disposeColor(d){const m={'返工':'bg-yellow-100 text-yellow-700','返修':'bg-blue-100 text-blue-700','报废':'bg-red-100 text-red-600','让步接收':'bg-purple-100 text-purple-700','退供应商':'bg-gray-100 text-gray-600'};return m[d]||'bg-gray-100 text-gray-600';}
+function renderPagination(total,pageCount){
+  const pg=document.getElementById('pagination'); if(!pg)return;
+  const pages=[]; for(let i=1;i<=pageCount;i++){if(i===1||i===pageCount||(i>=_ls.page-1&&i<=_ls.page+1))pages.push(i);else if(pages[pages.length-1]!=='...')pages.push('...');}
+  pg.innerHTML=`
+  <div class="flex items-center gap-1 flex-wrap">
+    <button onclick="goPage(${_ls.page-1})" ${_ls.page<=1?'disabled':''} class="px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-600 disabled:opacity-40 hover:bg-gray-50">‹ 上一页</button>
+    ${pages.map(p=>p==='...'?`<span class="px-2 text-gray-400">...</span>`:`<button onclick="goPage(${p})" class="w-8 h-8 rounded-lg text-sm ${p===_ls.page?'bg-blue-700 text-white font-bold':'border border-gray-300 text-gray-600 hover:bg-gray-50'}">${p}</button>`).join('')}
+    <button onclick="goPage(${_ls.page+1})" ${_ls.page>=pageCount?'disabled':''} class="px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-600 disabled:opacity-40 hover:bg-gray-50">下一页 ›</button>
+  </div>
+  <div class="flex items-center gap-3">
+    <span class="text-sm text-gray-500">每页</span>
+    <select onchange="changePageSize(this.value)" class="px-2 py-1.5 rounded-lg border border-gray-300 text-sm bg-white">
+      ${PAGE_SIZES.map(n=>`<option value="${n}" ${n===_ls.pageSize?'selected':''}>${n}条</option>`).join('')}
+    </select>
+    <span class="text-sm text-gray-500">第${_ls.page}/${pageCount}页，共${total}条</span>
+  </div>`;
+}
+function goPage(p){_ls.page=p;refreshTable();}
+function changePageSize(v){_ls.pageSize=+v;_ls.page=1;refreshTable();}
+function sortBy(k){_ls.sortDir=_ls.sortKey===k?(_ls.sortDir==='asc'?'desc':'asc'):'desc';_ls.sortKey=k;refreshTable();}
+function updateFilter(k,v){_ls.filters[k]=v;_ls.page=1;refreshTable();}
+function clearFilters(){_ls.filters={defectType:'',dispose:'',operator:'',dateFrom:'',dateTo:'',keyword:''};_ls.page=1;_ls.selectedIds.clear();renderAdminTab();}
+function toggleSelectAll(checked){
+  const all=getAllRecordsLocal(),filtered=filterRecords(all,_ls.filters);
+  const start=(_ls.page-1)*_ls.pageSize; filtered.slice(start,start+_ls.pageSize).forEach(r=>checked?_ls.selectedIds.add(r.id):_ls.selectedIds.delete(r.id)); refreshTable();
+}
+function toggleSelectRow(id,checked){checked?_ls.selectedIds.add(id):_ls.selectedIds.delete(id);syncBatchBtn();}
+function syncBatchBtn(){const btn=document.getElementById('batchDelBtn'),cnt=document.getElementById('batchCount');if(!btn)return;const n=_ls.selectedIds.size;btn.style.display=n>0?'':'none';if(cnt)cnt.textContent=n;}
+async function batchDelete(){const n=_ls.selectedIds.size;if(!n)return;openConfirm(`确定删除选中的${n}条？`,async()=>{await CloudDB.deleteMany([..._ls.selectedIds]);_ls.selectedIds.clear();showToast(`已删除${n}条`,'success');refreshTable();},'确认删除');}
+function onRowClick(e,id){if(e.target.tagName==='BUTTON'||e.target.tagName==='INPUT')return;openDetailPanel(id);}
+async function exportCSV(){
+  const all=await CloudDB.getAll(),data=filterRecords(all,_ls.filters);
+  if(!data.length){showToast('无数据可导出','warn');return;}
+  const headers=['记录ID','日期','产品名称','批次号','不良数量','不良类型','处置方式','操作员','备注','照片数','创建时间'];
+  let csv='﻿'+headers.join(',')+'\n';
+  data.forEach(r=>{csv+=[r.id,r.date,r.productName,r.batchNo||'',r.qty,r.defectType,r.dispose,r.operator,r.remark||'',(r.photos||[]).length,r.createdAt?new Date(r.createdAt).toLocaleString('zh-CN'):''].map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')+'\n';});
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download=`返工返修记录_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.csv`;a.click();URL.revokeObjectURL(url);
+  showToast(`已导出${data.length}条`,'success');
+}
+function getSubmitLink() {
+  const cc = getCloudConfig();
+  const base = (cc.siteUrl || location.href.split('?')[0]).replace(/\/?$/, '/');
+  return base + '?mode=submit';
+}
+function copySubmitLink() {
+  const url = getSubmitLink();
+  navigator.clipboard.writeText(url).then(()=>showToast('填报链接已复制！','success')).catch(()=>prompt('请复制此链接：',url));
+}
+/** 实时更新预览框 */
+function updateSubmitLinkPreview() {
+  const input = document.getElementById('cfg_siteUrl');
+  const preview = document.getElementById('submitLinkPreview');
+  if (!input || !preview) return;
+  const base = (input.value.trim() || location.href.split('?')[0]).replace(/\/?$/, '/');
+  preview.value = base + '?mode=submit';
+}
+/** 保存站点地址到云端配置 */
+function saveSiteUrl() {
+  const input = document.getElementById('cfg_siteUrl');
+  const url = (input?.value || '').trim();
+  if (!url) { showToast('请输入站点地址', 'error'); return; }
+  const cc = getCloudConfig();
+  saveCloudConfig({ ...cc, siteUrl: url.replace(/\/?$/, '/') });
+  updateSubmitLinkPreview();
+  showToast('填报链接已保存', 'success');
+}
+
+/* ============================================================
+   ★ 模块二十二：行详情面板（已移除 dept/reason/workHours）
+   ============================================================ */
+async function openDetailPanel(id){
+  const all=await CloudDB.getAll(); const r=all.find(x=>x.id===id); if(!r)return;
+  const photos=r.photos||[];
+  document.getElementById('detailContent').innerHTML=`
+  <div class="space-y-2.5">
+    ${[['发生日期',r.date],['产品名称',`<b class="text-gray-800">${esc(r.productName)}</b>`],
+      ['批次号',r.batchNo||'-'],
+      ['不良数量',`<span class="text-red-600 font-bold text-lg">${r.qty} 件</span>`],
+      ['不良类型',`<span class="px-2 py-0.5 rounded bg-orange-100 text-orange-700 text-xs">${esc(r.defectType)}</span>`],
+      ['处置方式',`<span class="px-2 py-0.5 rounded ${disposeColor(r.dispose)} text-xs">${esc(r.dispose)}</span>`],
+      ['操作员',r.operator],['备注',r.remark||'-']]
+      .map(([lbl,val])=>`<div class="flex items-start justify-between gap-3 py-2 border-b border-gray-50 last:border-0"><span class="text-xs text-gray-400 shrink-0 w-16">${lbl}</span><span class="text-sm text-gray-800 text-right">${typeof val==='string'&&!val.startsWith('<')?esc(val):val}</span></div>`).join('')}
+  </div>
+  ${photos.length>0?`
+  <div class="mt-4"><h4 class="text-xs font-semibold text-gray-500 mb-2">📎 附件照片（${photos.length}张）</h4>
+    <div class="grid grid-cols-3 gap-2">
+      ${photos.map((p,i)=>`<div class="photo-thumb-wrap" onclick="openLightbox('${esc(p.dataUrl)}','${esc(p.name||'照片')}',${i+1},${photos.length})"><img src="${p.dataUrl}" alt="${esc(p.name||'照片')}" loading="lazy"/></div>`).join('')}
+    </div><p class="text-xs text-gray-400 mt-1 text-center">点击全屏查看</p>
+  </div>`:`<div class="mt-3 py-3 text-center text-gray-300 text-xs border border-dashed border-gray-200 rounded-lg">无附件照片</div>`}
+  <div class="text-xs text-gray-300 mt-3 space-y-0.5">
+    <div>ID: <span class="font-mono">${r.id}</span></div>
+    <div>创建: ${r.createdAt?new Date(r.createdAt).toLocaleString('zh-CN'):'-'}</div>
+    ${r.updatedAt?`<div>更新: ${new Date(r.updatedAt).toLocaleString('zh-CN')}</div>`:''}
+  </div>
+  <div class="flex gap-2 mt-4">
+    <button onclick="openEditModal('${r.id}');closeDetailPanel()" class="flex-1 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-sm font-medium">✏️ 编辑</button>
+    <button onclick="openDeleteConfirm('${r.id}');closeDetailPanel()" class="flex-1 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-sm">🗑 删除</button>
+  </div>`;
+  document.getElementById('detailPanel').classList.remove('hidden-panel');
+  document.getElementById('detailOverlay').classList.remove('hidden');
+}
+function closeDetailPanel(){document.getElementById('detailPanel').classList.add('hidden-panel');document.getElementById('detailOverlay').classList.add('hidden');}
+
+/* ============================================================
+   模块二十三：编辑 & 快速新增
+   ============================================================ */
+let _editingId=null;
+async function openEditModal(id){
+  const all=await CloudDB.getAll(); const r=all.find(x=>x.id===id);if(!r){showToast('记录不存在','error');return;}
+  _editingId=id;
+  document.getElementById('editModalTitle').textContent=`编辑 — ${r.productName}`;
+  document.getElementById('editModalBody').innerHTML=buildFormFields(r,'edit')+(r.photos?.length?`
+    <div class="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+      <p class="text-xs text-blue-700 font-semibold mb-2">📎 已附${r.photos.length}张照片（编辑模式不修改照片）</p>
+      <div class="grid grid-cols-4 gap-2">${r.photos.map((p,i)=>`<div class="photo-thumb-wrap" onclick="openLightbox('${esc(p.dataUrl)}','${esc(p.name||'照片')}',${i+1},${r.photos.length})"><img src="${p.dataUrl}" loading="lazy"/></div>`).join('')}</div>
+    </div>`:'');
+  document.getElementById('editModal').classList.remove('hidden');
+}
+function openQuickAdd(){_editingId=null;document.getElementById('editModalTitle').textContent='➕ 快速新增记录';document.getElementById('editModalBody').innerHTML=buildFormFields({date:new Date().toISOString().split('T')[0]},'edit');document.getElementById('editModal').classList.remove('hidden');}
+function closeEditModal(){document.getElementById('editModal').classList.add('hidden');_editingId=null;}
+async function saveEditRecord(){
+  const{ok,data,error}=readFormFields('edit');if(!ok){showToast(error,'error');return;}
+  if(_editingId){
+    const all=await CloudDB.getAll();const orig=all.find(r=>r.id===_editingId);
+    if(orig?.photos)data.photos=orig.photos;
+    await CloudDB.update(_editingId,data);showToast('记录已更新','success');
+  }else{await CloudDB.add(data);showToast('记录已新增','success');}
+  closeEditModal();await refreshTable();if(_adminTab==='stats')await updateCharts();
+}
+
+/* ============================================================
+   模块二十四：确认弹窗
+   ============================================================ */
+function openConfirm(msg,onOk,label='确认'){document.getElementById('confirmMsg').textContent=msg;const btn=document.getElementById('confirmOkBtn');btn.textContent=label;btn.onclick=()=>{onOk();closeConfirmModal();};document.getElementById('confirmModal').classList.remove('hidden');}
+function closeConfirmModal(){document.getElementById('confirmModal').classList.add('hidden');document.getElementById('confirmOkBtn').textContent='确认';}
+async function openDeleteConfirm(id){
+  const all=await CloudDB.getAll();const r=all.find(x=>x.id===id);if(!r)return;
+  openConfirm(`确定删除「${r.productName}」？不可恢复。`,async()=>{await CloudDB.delete(id);_ls.selectedIds.delete(id);showToast('已删除','success');refreshTable();},'确认删除');
+}
+
+/* ============================================================
+   ★ 模块二十五：统计图表 Tab（已移除部门图表和工时卡片）
+   ============================================================ */
+let _statsF={dateFrom:'',dateTo:''};
+const _charts={};
+function renderStatsTab(ct){
+  ct.innerHTML=`
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-4 no-print">
+    <div class="flex flex-wrap gap-3 items-end">
+      <div><label class="block text-xs text-gray-500 mb-1">开始日期</label><input type="date" value="${_statsF.dateFrom}" onchange="_statsF.dateFrom=this.value;updateCharts()" class="px-3 py-2 rounded-lg border border-gray-300 text-sm"/></div>
+      <div><label class="block text-xs text-gray-500 mb-1">结束日期</label><input type="date" value="${_statsF.dateTo}" onchange="_statsF.dateTo=this.value;updateCharts()" class="px-3 py-2 rounded-lg border border-gray-300 text-sm"/></div>
+      <button onclick="_statsF={dateFrom:'',dateTo:''};renderAdminTab()" class="px-4 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">重置</button>
+    </div>
+  </div>
+  <div id="statCards" class="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-5"></div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">不良类型分布（件数）</h3><div class="chart-container"><canvas id="chart_defectType"></canvas></div></div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">不良数量日趋势</h3><div class="chart-container"><canvas id="chart_trend"></canvas></div></div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">处置方式分布</h3><div class="chart-container"><canvas id="chart_dispose"></canvas></div></div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-3">操作员不良数量对比</h3><div class="chart-container"><canvas id="chart_operator"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-4">🏆 TOP5 — 产品不良数量</h3><div id="top5Products"></div></div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5"><h3 class="text-sm font-semibold text-gray-700 mb-4">📦 TOP5 — 不良类型件数</h3><div id="top5Defects"></div></div>
+  </div>`;
+  updateCharts();
+}
+
+async function updateCharts(){
+  const all=await CloudDB.getAll(),data=filterRecords(all,_statsF);
+  const sumQty=data.reduce((s,r)=>s+(+r.qty||0),0);
+  const operators=new Set(data.map(r=>r.operator)).size;
+  const ce=document.getElementById('statCards');
+  if(ce){
+    ce.innerHTML=[
+      {icon:'📦',label:'总不良件数',val:sumQty.toLocaleString(),color:'text-red-600',bg:'bg-red-50',border:'border-red-100'},
+      {icon:'📋',label:'记录总条数',val:data.length.toLocaleString(),color:'text-blue-600',bg:'bg-blue-50',border:'border-blue-100'},
+      {icon:'👷',label:'涉及操作员',val:operators,color:'text-purple-600',bg:'bg-purple-50',border:'border-purple-100'},
+    ].map(c=>`<div class="stat-card ${c.bg} border ${c.border} rounded-2xl p-4"><div class="flex items-center justify-between mb-2"><span class="text-2xl">${c.icon}</span><span class="text-xs text-gray-400">${c.label}</span></div><div class="${c.color} text-2xl font-bold">${c.val}</div></div>`).join('');
+  }
+  const COLORS=['#3b82f6','#ef4444','#f59e0b','#10b981','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f97316','#6366f1'];
+  const gQ=f=>{const m={};data.forEach(r=>{const k=r[f]||'未知';m[k]=(m[k]||0)+(+r.qty||0)});return m;};
+
+  const dt=gQ('defectType');drawChart('chart_defectType','pie',Object.keys(dt),Object.values(dt),COLORS);
+  const dm={};data.forEach(r=>{dm[r.date]=(dm[r.date]||0)+(+r.qty||0)});const sd=Object.keys(dm).sort();drawChart('chart_trend','line',sd,sd.map(d=>dm[d]),'#3b82f6');
+  const ds=gQ('dispose');drawChart('chart_dispose','doughnut',Object.keys(ds),Object.values(ds),COLORS);
+  const op=gQ('operator');drawChart('chart_operator','bar',Object.keys(op),Object.values(op),Object.keys(op).map((_,i)=>COLORS[i%COLORS.length]));
+  renderTop5('top5Products',gQ('productName'),'#ef4444');
+  renderTop5('top5Defects',gQ('defectType'),'#8b5cf6');
+}
+function renderTop5(elId,map,color){
+  const el=document.getElementById(elId);if(!el)return;
+  const sorted=Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  if(!sorted.length){el.innerHTML='<p class="text-gray-400 text-sm text-center py-4">暂无数据</p>';return;}
+  const max=sorted[0][1]||1;
+  el.innerHTML=sorted.map(([name,qty],i)=>`<div class="flex items-center gap-3 mb-3"><span class="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${i===0?'bg-yellow-400 text-white':i===1?'bg-gray-400 text-white':i===2?'bg-orange-400 text-white':'bg-gray-200 text-gray-600'}">${i+1}</span><div class="flex-1 min-w-0"><div class="flex justify-between items-baseline mb-1"><span class="text-sm text-gray-700 truncate max-w-[60%]" title="${esc(name)}">${esc(name)}</span><span class="text-sm font-bold text-gray-800 shrink-0 ml-2">${qty}件</span></div><div class="w-full bg-gray-100 rounded-full h-2"><div class="h-2 rounded-full" style="width:${(qty/max*100).toFixed(1)}%;background:${color}"></div></div></div></div>`).join('');
+}
+function drawChart(canvasId,type,labels,values,colors){
+  const canvas=document.getElementById(canvasId);if(!canvas)return;
+  if(_charts[canvasId]){_charts[canvasId].destroy();delete _charts[canvasId];}
+  if(!labels.length){const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#94a3b8';ctx.font='13px Microsoft YaHei';ctx.textAlign='center';ctx.fillText('暂无数据',canvas.width/2,canvas.height/2);return;}
+  const isLine=type==='line';
+  _charts[canvasId]=new Chart(canvas,{type,data:{labels,datasets:[{data:values,backgroundColor:isLine?'rgba(59,130,246,0.1)':(Array.isArray(colors)?colors:colors),borderColor:isLine?'#3b82f6':undefined,borderWidth:isLine?2:1,fill:isLine?true:undefined,tension:0.35,pointRadius:isLine?4:undefined,pointBackgroundColor:isLine?'#3b82f6':undefined}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:type!=='bar',position:'bottom',labels:{font:{size:11},padding:10,boxWidth:12}},tooltip:{callbacks:{label:ctx=>{const t=ctx.dataset.data.reduce((a,b)=>a+b,0);const p=t?((ctx.parsed.y??ctx.raw)/t*100).toFixed(1):0;return(type==='pie'||type==='doughnut')?` ${ctx.label}: ${ctx.raw} (${p}%)`:`${ctx.raw}`;}}}},scales:(type==='bar'||type==='line')?{y:{beginAtZero:true,ticks:{font:{size:11}},grid:{color:'#f1f5f9'}},x:{ticks:{font:{size:10}}}}:undefined}});
+}
+
+/* ============================================================
+   ★ 模块二十六：系统设置 Tab（产品名称列表 + 云端配置）
+   ============================================================ */
+function renderSettingsTab(ct){
+  const cfg=getConfig(),cc=getCloudConfig();
+  ct.innerHTML=`
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+    <div class="space-y-4">
+
+      <!-- 云端配置 -->
+      <div class="bg-white rounded-2xl shadow-sm border ${cc.url&&cc.key?'border-green-200':'border-blue-200'} p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-gray-700">☁️ 云端同步配置</h3>
+          <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${cc.url&&cc.key?'bg-green-100 text-green-700':'bg-gray-100 text-gray-500'}">
+            <span class="w-2 h-2 rounded-full ${cc.url&&cc.key?'bg-green-500':'bg-gray-400'}"></span>
+            ${cc.url&&cc.key?'已连接云端':'本地模式'}
+          </span>
+        </div>
+        ${cc.url&&cc.key?
+          `<div class="bg-green-50 border border-green-200 rounded-xl p-3 mb-3 text-xs text-green-800">✅ 已连接 Supabase：<span class="break-all text-green-600">${esc(cc.url)}</span></div>`:
+          `<div class="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 text-xs text-blue-800">💡 未配置云端，数据仅存本地浏览器</div>`}
+        <div class="space-y-2 mb-3">
+          <div><label class="block text-xs font-semibold text-gray-600 mb-1">Supabase Project URL</label>
+          <input type="text" id="cfg_supabase_url" value="${esc(cc.url||'')}" placeholder="https://xxxxxxxxxx.supabase.co" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/></div>
+          <div><label class="block text-xs font-semibold text-gray-600 mb-1">anon public Key</label>
+          <input type="text" id="cfg_supabase_key" value="${esc(cc.key||'')}" placeholder="eyJhbGci..." class="w-full px-3 py-2 rounded-lg border border-gray-300 text-xs focus:ring-2 focus:ring-blue-400 focus:outline-none"/></div>
+        </div>
+        <div class="flex gap-2 flex-wrap mb-3">
+          <button onclick="testAndSaveCloud()" class="flex-1 min-w-[100px] py-2 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-xs">✅ 测试并保存</button>
+          ${cc.url&&cc.key?`<button onclick="clearCloudConfig()" class="flex-1 min-w-[100px] py-2 border border-red-300 text-red-600 hover:bg-red-50 rounded-xl text-xs">🗑 清除云端配置</button>`:''}
+        </div>
+        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3">
+          <p class="text-xs font-semibold text-gray-600 mb-2">🔗 员工填报链接（发送到微信）</p>
+          <div class="flex gap-2 items-center mb-2">
+            <input type="text" id="cfg_siteUrl" value="${esc(cc.siteUrl||location.href.split('?')[0])}"
+              placeholder="https://你的域名/"
+              oninput="updateSubmitLinkPreview()"
+              class="flex-1 px-2 py-1.5 rounded-lg border border-gray-300 text-xs bg-white text-gray-700 font-mono focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+            <button onclick="saveSiteUrl()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium shrink-0">保存</button>
+          </div>
+          <div class="flex gap-2 items-center">
+            <input type="text" id="submitLinkPreview" readonly
+              value="${esc((cc.siteUrl||location.href.split('?')[0]).replace(/\/?$/,'/')+'?mode=submit')}"
+              class="flex-1 px-2 py-1.5 rounded-lg border border-gray-200 text-xs bg-gray-100 text-gray-600 font-mono cursor-pointer"
+              onclick="copySubmitLink()" title="点击复制"/>
+            <button onclick="copySubmitLink()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium shrink-0">复制</button>
+          </div>
+          <p class="text-xs text-gray-400 mt-1.5">修改上方地址为 GitHub Pages 网址后点「保存」，链接将自动更新</p>
+        </div>
+        </div>
+      </div>
+
+      <!-- 基础配置 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-4">🏢 基础配置</h3>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">公司名称</label>
+        <input type="text" id="cfg_companyName" value="${esc(cfg.companyName)}" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">管理员密码 <span class="text-gray-400 font-normal">（留空无需密码）</span></label>
+        <input type="password" id="cfg_adminPassword" value="${esc(cfg.adminPassword||'')}" placeholder="设置密码或留空" class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 focus:ring-2 focus:ring-blue-400 focus:outline-none"/>
+        <button onclick="saveSettings()" class="w-full py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-sm">💾 保存基础配置</button>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+
+      <!-- ★ 产品名称管理 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-1">📦 产品名称管理</h3>
+        <p class="text-xs text-gray-400 mb-3">以下列表用于填报时下拉选择，每行一个产品名称</p>
+        <textarea id="cfg_productOptions" rows="8"
+          class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm resize-none focus:ring-2 focus:ring-blue-400 focus:outline-none mb-3"
+          placeholder="每行输入一个产品名称&#10;例如：&#10;A型支架&#10;B型外壳&#10;C型螺母">${esc((cfg.productOptions||[]).join('\n'))}</textarea>
+        <button onclick="saveProductOptions()" class="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl text-sm">💾 保存产品列表</button>
+      </div>
+
+      <!-- 不良类型 + 处置方式 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-4">📂 分类配置</h3>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">不良类型（每行一个）</label>
+        <textarea id="cfg_defectTypeOptions" rows="5"
+          class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 resize-none focus:ring-2 focus:ring-blue-400 focus:outline-none">${esc(cfg.defectTypeOptions.join('\n'))}</textarea>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">处置方式（每行一个）</label>
+        <textarea id="cfg_disposeOptions" rows="4"
+          class="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm mb-3 resize-none focus:ring-2 focus:ring-blue-400 focus:outline-none">${esc(cfg.disposeOptions.join('\n'))}</textarea>
+        <button onclick="saveClassifySettings()" class="w-full py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-semibold rounded-xl text-sm">💾 保存分类配置</button>
+      </div>
+
+      <!-- 备份恢复 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-4">💾 数据备份与恢复</h3>
+        <div class="flex gap-2 flex-wrap mb-3">
+          <button onclick="exportJSON()" class="flex-1 min-w-[110px] py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl text-sm">📤 导出 JSON</button>
+          <button onclick="document.getElementById('importFile').click()" class="flex-1 min-w-[110px] py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl text-sm">📥 导入 JSON</button>
+          <input type="file" id="importFile" accept=".json" class="hidden" onchange="importJSON(event)"/>
+        </div>
+        <div class="border border-red-200 rounded-xl p-4 bg-red-50">
+          <h4 class="text-sm font-semibold text-red-700 mb-2">⚠️ 危险区</h4>
+          <button onclick="clearAllDataConfirm()" class="w-full py-2 border border-red-400 text-red-600 hover:bg-red-100 rounded-lg text-sm">🗑 清空全部数据</button>
+        </div>
+      </div>
+
+      <!-- 存储情况 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">📊 存储使用情况</h3>
+        <div id="storageInfo"></div>
+      </div>
+    </div>
+  </div>`;
+  renderStorageInfo();
+}
+
+/** 保存基础配置（公司名、密码） */
+function saveSettings(){
+  const cfg=getConfig();
+  cfg.companyName=(document.getElementById('cfg_companyName')?.value||'').trim();
+  cfg.adminPassword=(document.getElementById('cfg_adminPassword')?.value||'');
+  if(!cfg.companyName){showToast('公司名称不能为空','error');return;}
+  saveConfig(cfg);showToast('基础配置已保存','success');updateHeaderInfo();
+}
+
+/** 保存产品名称列表 */
+function saveProductOptions(){
+  const cfg=getConfig();
+  const lines=(document.getElementById('cfg_productOptions')?.value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  cfg.productOptions=lines;
+  saveConfig(cfg);showToast(`产品列表已保存（${lines.length}个）`,'success');
+}
+
+/** 保存分类配置 */
+function saveClassifySettings(){
+  const cfg=getConfig();
+  const lines=id=>(document.getElementById(id)?.value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  cfg.defectTypeOptions=lines('cfg_defectTypeOptions');
+  cfg.disposeOptions=lines('cfg_disposeOptions');
+  if(!cfg.defectTypeOptions.length){showToast('不良类型不能为空','error');return;}
+  if(!cfg.disposeOptions.length){showToast('处置方式不能为空','error');return;}
+  saveConfig(cfg);showToast('分类配置已保存','success');
+}
+
+async function testAndSaveCloud(){
+  const url=(document.getElementById('cfg_supabase_url')?.value||'').trim();
+  const key=(document.getElementById('cfg_supabase_key')?.value||'').trim();
+  if(!url&&!key){clearCloudConfig();return;}
+  if(!url||!key){showToast('请同时填写 URL 和 Key','error');return;}
+  const btn=document.querySelector('button[onclick="testAndSaveCloud()"]');
+  if(btn){btn.textContent='测试中...';btn.disabled=true;}
+  const result=await CloudDB.testConnection(url,key);
+  if(btn){btn.textContent='✅ 测试并保存';btn.disabled=false;}
+  if(!result.ok){showToast('连接失败：'+(result.msg||'未知'),'error');return;}
+  saveCloudConfig({url,key});showToast('云端连接成功！','success');
+  setCloudStatus('ok');startPolling();renderSettingsTab(document.getElementById('adminTabContent'));
+  promptSyncLocalToCloud();
+}
+function clearCloudConfig(){openConfirm('确定清除云端配置？',()=>{saveCloudConfig({});setCloudStatus('local');stopPolling();showToast('已切回本地模式','info');renderSettingsTab(document.getElementById('adminTabContent'));});}
+
+function promptSyncLocalToCloud(){
+  const local=getAllRecordsLocal();if(!local.length)return;
+  openConfirm(`检测到本地有${local.length}条记录，是否上传到云端？`,async()=>{
+    let ok=0;
+    for(const rec of local){try{const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(rec))});if(res.ok)ok++;}catch{}}
+    if(ok>0){saveAllRecordsLocal([]);showToast(`已上传${ok}条到云端`,'success');refreshTable();}
+    else showToast('上传失败，请检查网络','error');
+  },'上传到云端');
+}
+
+async function renderStorageInfo(){
+  const localList=getAllRecordsLocal();
+  const raw=localStorage.getItem(LS_KEY)||'';const kb=(new Blob([raw]).size/1024).toFixed(1);const pct=Math.min(+kb/5120*100,100).toFixed(2);
+  const el=document.getElementById('storageInfo');if(!el)return;
+  let cloudCount='—';
+  if(CloudDB.enabled()){try{const all=await CloudDB.getAll();cloudCount=all.length+'条';}catch{cloudCount='获取失败';}}
+  el.innerHTML=`
+  <div class="space-y-2 text-sm text-gray-600">
+    ${CloudDB.enabled()?`<div class="flex justify-between"><span>☁️ 云端记录数</span><b class="text-blue-600">${cloudCount}</b></div>`:''}
+    <div class="flex justify-between"><span>💾 本地缓存数</span><b>${localList.length}条</b></div>
+    <div class="flex justify-between"><span>本地占用</span><b>${kb} KB / ~5MB</b></div>
+    <div class="w-full bg-gray-200 rounded-full h-2 mt-2"><div class="h-2 rounded-full ${+pct>80?'bg-red-500':+pct>50?'bg-yellow-500':'bg-blue-500'}" style="width:${pct}%"></div></div>
+    <p class="text-xs ${+pct>80?'text-red-500':'text-gray-400'}">已使用${pct}%${+pct>80?' ⚠️ 建议导出备份':''}</p>
+  </div>`;
+}
+
+async function exportJSON(){
+  const list=await CloudDB.getAll();if(!list.length){showToast('暂无数据','warn');return;}
+  const blob=new Blob([JSON.stringify({version:1,exportTime:new Date().toISOString(),records:list},null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download=`返工返修备份_${new Date().toLocaleDateString('zh-CN').replace(/\//g,'-')}.json`;a.click();URL.revokeObjectURL(url);
+  showToast(`已导出${list.length}条`,'success');
+}
+async function importJSON(event){
+  const file=event.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=async e=>{
+    try{
+      const json=JSON.parse(e.target.result);
+      const incoming=json.records||(Array.isArray(json)?json:[]);
+      if(!incoming.length){showToast('文件无有效记录','warn');return;}
+      const existing=await CloudDB.getAll();const existIds=new Set(existing.map(r=>r.id));
+      const fresh=incoming.filter(r=>r.id&&!existIds.has(r.id));
+      let ok=0;
+      if(CloudDB.enabled()){for(const rec of fresh){try{const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(rec))});if(res.ok)ok++;}catch{}}}
+      else{fresh.forEach(r=>addRecordLocal(r));ok=fresh.length;}
+      showToast(`导入成功，新增${ok}条`,'success');renderStorageInfo();
+    }catch{showToast('JSON格式错误','error');}
+  };
+  reader.readAsText(file,'UTF-8');event.target.value='';
+}
+async function clearAllDataConfirm(){
+  openConfirm(`确定清空${CloudDB.enabled()?'云端':'全部'}数据？不可恢复！`,async()=>{
+    if(CloudDB.enabled()){const all=await CloudDB.getAll();const ids=all.map(r=>r.id);if(ids.length){const ic=ids.map(id=>encodeURIComponent(id)).join(',');await CloudDB._fetch(CloudDB.base()+`?id=in.(${ic})`,{method:'DELETE',headers:CloudDB.headers()});}}
+    saveAllRecordsLocal([]);showToast('数据已清空','success');renderStorageInfo();
+  },'确认清空');
+}
+
+/* ============================================================
+   模块二十七：路由 & 初始化
+   ============================================================ */
+function getMode(){return(new URLSearchParams(location.search).get('mode')||'admin')==='submit'?'submit':'admin';}
+function updateHeaderInfo(){
+  const mode=getMode(),cfg=getConfig();
+  const sub=document.getElementById('headerSubtitle'),badge=document.getElementById('modeBadge'),sw=document.getElementById('switchModeBtn');
+  if(sub)sub.textContent=cfg.companyName;
+  if(badge){badge.textContent=mode==='submit'?'员工填报模式':'管理员后台';badge.className=`hidden sm:inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${mode==='submit'?'bg-green-700 border border-green-500':'bg-blue-800 border border-blue-500'}`;}
+  if(sw){sw.classList.remove('hidden');sw.textContent=mode==='submit'?'切换后台':'切换填报';sw.href=location.href.split('?')[0]+(mode==='submit'?'?mode=admin':'?mode=submit');}
+  setCloudStatus(CloudDB.enabled()?'ok':'local');
+}
+function init(){
+  updateHeaderInfo();updateOfflineBar();
+  const mode=getMode();
+  if(mode==='submit')renderSubmitPage();
+  else{checkAdminPassword();if(_adminUnlocked)renderAdminPage();}
+}
+
+window.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('editModal')?.addEventListener('click',e=>{if(e.target===document.getElementById('editModal'))closeEditModal();});
+  document.getElementById('confirmModal')?.addEventListener('click',e=>{if(e.target===document.getElementById('confirmModal'))closeConfirmModal();});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeLightbox();stopQRScanner();closeEditModal();closeConfirmModal();}});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&CloudDB.enabled()&&_adminTab!=='settings')startPolling();else stopPolling();});
+  window.addEventListener('online',()=>{showToast('网络已恢复','success');syncOfflineQueue();});
+  window.addEventListener('offline',()=>{showToast('网络已断开，数据将暂存本地','warn');setCloudStatus('error');});
+  init();
+});
+</script>
+
+<footer class="mt-10 border-t border-gray-200 bg-white py-4 text-center text-xs text-gray-400 no-print">
+  返工返修数据管理系统 · 云端实时同步（Supabase）
+  <span class="mx-2">|</span>
+  <a href="?mode=submit" class="text-blue-400 hover:text-blue-600 underline">员工填报入口</a>
+  <span class="mx-2">|</span>
+  <a href="?mode=admin" class="text-blue-400 hover:text-blue-600 underline">管理后台入口</a>
+</footer>
+</body>
+</html>
