@@ -390,7 +390,8 @@ const FIELD_TO_DB = {
   qcTime:'qc_time',     qcRemark:'qc_remark',
 };
 const DB_TO_FIELD = Object.fromEntries(Object.entries(FIELD_TO_DB).map(([k,v])=>[v,k]));
-function toDBRow(rec) { const r={}; for(const[k,v] of Object.entries(rec)) r[FIELD_TO_DB[k]||k]=v; return r; }
+// 转换为 DB 行时跳过 null/undefined，避免向不存在的列写入导致 HTTP 400
+function toDBRow(rec) { const r={}; for(const[k,v] of Object.entries(rec)) { if(v!==null&&v!==undefined) r[FIELD_TO_DB[k]||k]=v; } return r; }
 function fromDBRow(row) { const r={}; for(const[k,v] of Object.entries(row)) r[DB_TO_FIELD[k]||k]=v; return r; }
 
 const CloudDB = {
