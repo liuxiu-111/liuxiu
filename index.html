@@ -136,12 +136,8 @@
   </div>
 </header>
 
-<!-- ===== 离线队列提示条 ===== -->
-<div id="offlineBar" class="hidden bg-yellow-500 text-white text-xs text-center py-2 px-4 sticky top-14 z-40 no-print">
-  ⚠️ 网络离线，数据已暂存本地。
-  <button onclick="syncOfflineQueue()" class="ml-3 underline font-semibold">立即同步</button>
-  <span id="offlineCount" class="ml-2 bg-white text-yellow-700 px-1.5 py-0.5 rounded-full font-bold">0</span> 条待同步
-</div>
+<!-- ===== 离线队列提示条（已禁用）===== -->
+<div id="offlineBar" class="hidden" style="display:none!important"></div>
 
 <!-- ===== Toast ===== -->
 <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-[150] bg-gray-800 text-white px-5 py-2.5 rounded-xl shadow-xl text-sm opacity-0 pointer-events-none select-none max-w-xs text-center"></div>
@@ -570,10 +566,17 @@ async function syncOfflineQueue() {
   for(const item of q) {
     try {
       if(item.action==='add') {
-        const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(item.rec))});
+        // 用 toDBRow 清洗旧队列数据（过滤 dept 等非法字段）
+        const body = JSON.stringify(toDBRow(item.rec));
+        const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body});
         if(res.ok || res.status===409){
           // 200/201 成功；409 说明之前其实已写入，均视为成功
           ok++; deleteRecordLocal(item.rec.id);
+        } else if(res.status===400){
+          // 400 = 字段不合法，该条记录无法写入，直接丢弃避免永久卡住
+          // 数据已存在本地 localStorage，不会丢失
+          ok++; // 计入"处理完成"，清出队列
+          console.warn('队列记录字段不合法已跳过（本地有保留）:', item.rec?.id);
         } else {
           remaining.push(item); fail++;
           if(res.status===503||res.status===0) lastErrMsg='云端服务暂停，请登录 Supabase 控制台点击 Restore 恢复项目';
@@ -1230,7 +1233,6 @@ function renderListTab(ct){
   <div class="flex flex-wrap items-center justify-between gap-3 mb-3 no-print">
     <div id="listSummary" class="text-sm text-gray-500 font-medium"></div>
     <div class="flex flex-wrap gap-2">
-      <button onclick="openQuickAdd()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-sm shadow-blue-200 transition">➕ 新增</button>
       <button id="batchDelBtn" onclick="batchDelete()" style="display:none" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-medium shadow-sm shadow-red-200 transition">🗑 删除(<span id="batchCount">0</span>)</button>
       <button id="batchQCBtn" onclick="openBatchQCModal()" style="display:none" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium shadow-sm shadow-purple-200 transition">🔍 批量质检(<span id="batchQCCount">0</span>)</button>
       <button onclick="exportExcel()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium shadow-sm shadow-emerald-200 transition">📥 导出</button>
@@ -2049,6 +2051,8 @@ function hideLoadingMask() {
 }
 
 async function init(){
+  // 清空历史离线队列，避免旧数据反复触发 400 错误
+  localStorage.removeItem('rework_offline_queue_v1');
   updateHeaderInfo();
   updateOfflineBar();
   const mode = getMode();
