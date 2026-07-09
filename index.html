@@ -390,9 +390,23 @@ const FIELD_TO_DB = {
   qcStatus:'qc_status', qcJudge:'qc_judge',
   qcTime:'qc_time',     qcRemark:'qc_remark',
 };
+// Supabase 表中合法的 JS 字段名集合（只发这些字段，避免多余字段触发 HTTP 400）
+const DB_ALLOWED_FIELDS = new Set([
+  'id','date','productName','batchNo','qty','defectType','dispose',
+  'operator','remark','photos','workHours','createdAt','updatedAt',
+  'qcStatus','qcJudge','qcTime','qcRemark',
+]);
 const DB_TO_FIELD = Object.fromEntries(Object.entries(FIELD_TO_DB).map(([k,v])=>[v,k]));
-// 转换为 DB 行时跳过 null/undefined，避免向不存在的列写入导致 HTTP 400
-function toDBRow(rec) { const r={}; for(const[k,v] of Object.entries(rec)) { if(v!==null&&v!==undefined) r[FIELD_TO_DB[k]||k]=v; } return r; }
+// 转换为 DB 行时：仅发送白名单字段，且跳过 null/undefined/空字符串
+function toDBRow(rec) {
+  const r={};
+  for(const[k,v] of Object.entries(rec)) {
+    if(!DB_ALLOWED_FIELDS.has(k)) continue;       // 过滤 dept 等非法字段
+    if(v===null||v===undefined||v==='') continue; // 过滤空值
+    r[FIELD_TO_DB[k]||k]=v;
+  }
+  return r;
+}
 function fromDBRow(row) { const r={}; for(const[k,v] of Object.entries(row)) r[DB_TO_FIELD[k]||k]=v; return r; }
 
 const CloudDB = {
