@@ -441,11 +441,9 @@ const CloudDB = {
       if(!res.ok) throw new Error('HTTP '+res.status);
       setCloudStatus('ok');
       const cloudRows = (await res.json()).map(fromDBRow);
-      // 合并本地未同步的记录（离线队列中的 add 操作对应的本地记录）
-      const offlineIds = new Set(getOfflineQueue().filter(x=>x.action==='add').map(x=>x.rec?.id).filter(Boolean));
-      const localOnly = offlineIds.size > 0
-        ? getAllRecordsLocal().filter(r => offlineIds.has(r.id))
-        : [];
+      // 合并本地有、但云端还没有的记录（不依赖离线队列，以防队列被清空后记录消失）
+      const cloudIds = new Set(cloudRows.map(r => r.id));
+      const localOnly = getAllRecordsLocal().filter(r => r.id && !cloudIds.has(r.id));
       const merged = localOnly.length ? [...cloudRows, ...localOnly] : cloudRows;
       return applyQCStore(merged);
     } catch(e) { setCloudStatus('error'); return applyQCStore(getAllRecordsLocal()); }
@@ -596,13 +594,14 @@ async function syncOfflineQueue() {
         const body = JSON.stringify(toDBRow(item.rec));
         const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body});
         if(res.ok || res.status===409){
-          // 200/201 成功；409 说明之前其实已写入，均视为成功
+          // 200/201 成功；409 说明之前其实已写入，均视为成功，从本地删除副本
           ok++; deleteRecordLocal(item.rec.id);
         } else if(res.status===400){
-          // 400 = 字段不合法，该条记录无法写入，直接丢弃避免永久卡住
-          // 数据已存在本地 localStorage，不会丢失
-          ok++; // 计入"处理完成"，清出队列
-          console.warn('队列记录字段不合法已跳过（本地有保留）:', item.rec?.id);
+          // 400 = 字段仍不合法，打印错误体帮助排查，保留在队列和本地
+          const errText = await res.text().catch(()=>'');
+          console.error('队列记录 INSERT 400，字段仍有问题，保留本地等待修复:', item.rec?.id, errText);
+          remaining.push(item); fail++;
+          lastErrMsg = '数据格式问题（400），请联系管理员';
         } else {
           remaining.push(item); fail++;
           if(res.status===503||res.status===0) lastErrMsg='云端服务暂停，请登录 Supabase 控制台点击 Restore 恢复项目';
@@ -1216,8 +1215,8 @@ function renderAdminPage(){
   </div>
   <div id="adminTabContent"></div>`;
   renderAdminTab(); startPolling();
-  // 管理后台加载时若有离线记录，静默同步
-  if(getOfflineQueue().length > 0 && CloudDB.enabled()) syncOfflineQueue();
+  // 管理后台加载后若有离线记录，延迟同步（避免与首次 refreshTable 竞态）
+  if(getOfflineQueue().length > 0 && CloudDB.enabled()) setTimeout(syncOfflineQueue, 1500);
 }
 function switchAdminTab(tab){
   _adminTab=tab;
@@ -2094,9 +2093,35 @@ function hideLoadingMask() {
   document.getElementById('loadingMask')?.remove();
 }
 
+/** 清理历史遗留的、因字段问题永久无法写入云端的离线队列记录
+ *  策略：本地 localStorage 已有完整记录作为保底，
+ *        队列里的 add 条目只需保留"尚未出现在本地"的真正离线场景。
+ *        凡是本地 localStorage 中已有对应记录的 add 条目，都不再需要重试，清除即可。
+ */
+function migrateOfflineQueue() {
+  const q = getOfflineQueue();
+  if (!q.length) return;
+  const localIds = new Set(getAllRecordsLocal().map(r => r.id));
+  // 只保留 qcPatch 类型，以及本地确实没有的 add（真正网络中断时才可能出现）
+  const cleaned = q.filter(item => {
+    if (item.action === 'qcPatch') return true;   // qc 判定保留，继续重试
+    if (item.action === 'add') {
+      // 本地已有：说明数据安全，队列条目多余；getAll 会自动合并本地数据到列表
+      if (item.rec?.id && localIds.has(item.rec.id)) return false;
+    }
+    return true;
+  });
+  if (cleaned.length < q.length) {
+    saveOfflineQueue(cleaned);
+    updateOfflineBar();
+    console.info(`离线队列迁移：清理了 ${q.length - cleaned.length} 条冗余 add 条目（本地已保留数据）`);
+  }
+}
+
 async function init(){
   updateHeaderInfo();
   updateOfflineBar();
+  migrateOfflineQueue(); // 清理历史遗留的不可写队列记录
   const mode = getMode();
 
   // 先从云端拉取最新配置（所有设备保持一致）
