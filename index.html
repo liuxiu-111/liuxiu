@@ -407,6 +407,8 @@ function toDBRow(rec) {
     if(v===null||v===undefined) continue;
     r[FIELD_TO_DB[k]||k]=v;
   }
+  // dept 列在数据库中为 NOT NULL，表单已移除该字段，补空字符串默认值避免 400
+  if(!('dept' in r)) r.dept = '';
   return r;
 }
 // PATCH 时序列化（允许 qc 字段 + 基础字段）
@@ -423,9 +425,13 @@ function fromDBRow(row) { const r={}; for(const[k,v] of Object.entries(row)) r[D
 
 const CloudDB = {
   enabled() { const c=getCloudConfig(); return !!(c.url&&c.key); },
-  headers() {
+  // 基础请求头（不含 Prefer，按操作类型单独设置）
+  _baseHeaders() {
     const c=getCloudConfig();
-    return { 'Content-Type':'application/json', 'apikey':c.key, 'Authorization':`Bearer ${c.key}`, 'Prefer':'return=representation' };
+    return { 'Content-Type':'application/json', 'apikey':c.key, 'Authorization':`Bearer ${c.key}` };
+  },
+  headers() {   // 兼容旧调用（getAll 等 GET 请求不需要 Prefer）
+    return this._baseHeaders();
   },
   base() { return getCloudConfig().url.replace(/\/$/,'')+'/rest/v1/rework_records'; },
   async _fetch(url,opts={},timeout=10000) {
@@ -453,18 +459,24 @@ const CloudDB = {
     try {
       setCloudStatus('syncing');
       const body = toDBRow(rec);
-      const res=await this._fetch(this.base(),{method:'POST',headers:this.headers(),body:JSON.stringify(body)});
+      const res=await this._fetch(this.base(),{
+        method:'POST',
+        headers:{...this._baseHeaders(), 'Prefer':'return=minimal'},
+        body:JSON.stringify(body)
+      });
       if(!res.ok) {
-        // 打印 Supabase 返回的错误详情，便于排查字段问题
         const errText = await res.text().catch(()=>'');
+        // 把真实错误体打印到页面，方便排查
+        const short = errText.length > 200 ? errText.slice(0, 200) : errText;
+        showToast(`写入失败 HTTP ${res.status}: ${short}`, 'error');
         throw new Error(`HTTP ${res.status}: ${errText}`);
       }
       setCloudStatus('ok');
-      const rows=await res.json(); return fromDBRow(Array.isArray(rows)?rows[0]:rows);
+      return rec;
     } catch(e) {
       console.warn('云端写入失败:', e.message);
       setCloudStatus('error');
-      return null; // 本地已由调用方写入，云端失败返回 null（区别于成功）
+      return null;
     }
   },
   async update(id,patch) {
@@ -474,7 +486,7 @@ const CloudDB = {
       const dbPatch = toDBPatch(patch);  // 允许 qc 字段通过（仅在 PATCH 时使用）
       const res=await this._fetch(this.base()+`?id=eq.${encodeURIComponent(id)}`,{
         method:'PATCH',
-        headers:{...this.headers(), 'Prefer':'return=representation'},
+        headers:{...this._baseHeaders(), 'Prefer':'return=minimal'},
         body:JSON.stringify(dbPatch)
       });
       if(!res.ok) throw new Error('HTTP '+res.status);
@@ -592,7 +604,7 @@ async function syncOfflineQueue() {
       if(item.action==='add') {
         // 用 toDBRow 清洗旧队列数据（过滤 dept 等非法字段）
         const body = JSON.stringify(toDBRow(item.rec));
-        const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body});
+        const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:{...CloudDB._baseHeaders(),'Prefer':'return=minimal'},body});
         if(res.ok || res.status===409){
           // 200/201 成功；409 说明之前其实已写入，均视为成功，从本地删除副本
           ok++; deleteRecordLocal(item.rec.id);
@@ -1146,9 +1158,11 @@ async function handleSubmit(e){
   addRecordLocal(localRec); // 先写本地，保证填报页"最近提交"立即显示
   const cloudResult = await CloudDB.add(data); // 再写云端（无 photos/qcStatus）
   if(btn){btn.disabled=false;btn.textContent='✅ 提交记录';}
-  // 判断云端是否写入成功（成功时云端返回带 id 的完整记录）
   const cloudOk = cloudResult !== null && CloudDB.enabled();
-  if(!cloudOk && CloudDB.enabled()){
+  if(cloudOk) {
+    // 云端写入成功：删除本地副本，避免 getAll 重复合并
+    deleteRecordLocal(data.id);
+  } else if(CloudDB.enabled()) {
     // 云端失败，加入离线队列等待重试
     addToOfflineQueue({action:'add', rec:data});
   }
@@ -1892,9 +1906,11 @@ function renderSettingsTab(ct){
       </div>
       <div class="flex gap-2 flex-wrap">
         <button onclick="testAndSaveCloud()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl transition">测试并保存</button>
+        ${cc.url&&cc.key?`<button onclick="testWritePermission()" class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-xl transition">🔬 测试写入权限</button>`:''}
         ${cc.url&&cc.key?`<button onclick="clearCloudConfig()" class="px-4 py-2 border border-red-200 text-red-500 hover:bg-red-50 text-sm rounded-xl transition">清除配置</button>`:''}
         ${cc.url&&cc.key?`<button id="syncQCBtn" onclick="syncQCToCloud()" class="px-4 py-2 border border-purple-200 text-purple-600 hover:bg-purple-50 text-sm rounded-xl transition">☁️ 同步质检数据</button>`:''}
       </div>
+      <div id="writeTestResult" class="mt-3 hidden"></div>
       <div class="mt-4 pt-4 border-t border-gray-100">
         <label class="block text-xs font-medium text-gray-500 mb-1.5">员工填报链接</label>
         <div class="flex gap-2 items-center mb-2">
@@ -2007,11 +2023,68 @@ async function testAndSaveCloud(){
 }
 function clearCloudConfig(){openConfirm('确定清除云端配置？',()=>{saveCloudConfig({});setCloudStatus('local');stopPolling();showToast('已切回本地模式','info');renderSettingsTab(document.getElementById('adminTabContent'));});}
 
+/** 测试 INSERT 权限，把完整错误显示在页面，帮助排查 RLS / 字段问题 */
+async function testWritePermission() {
+  const btn = document.querySelector('button[onclick="testWritePermission()"]');
+  const resultEl = document.getElementById('writeTestResult');
+  if(btn){btn.disabled=true; btn.textContent='测试中...';}
+
+  const testRec = {
+    id: '__test__' + Date.now(),
+    date: new Date().toISOString().split('T')[0],
+    productName: '写入权限测试',
+    batchNo: 'TEST',
+    qty: 1,
+    defectType: '测试',
+    dispose: '返工',
+    operator: '系统自检',
+    remark: '可删除',
+    createdAt: new Date().toISOString(),
+  };
+
+  let html = '';
+  try {
+    const postRes = await CloudDB._fetch(CloudDB.base(), {
+      method: 'POST',
+      headers: {...CloudDB._baseHeaders(), 'Prefer': 'return=minimal'},
+      body: JSON.stringify(toDBRow(testRec))
+    }, 10000);
+    const postBody = await postRes.text().catch(()=>'');
+
+    if(postRes.ok) {
+      await CloudDB._fetch(CloudDB.base() + '?id=eq.' + testRec.id, {
+        method: 'DELETE', headers: CloudDB._baseHeaders()
+      }, 5000).catch(()=>{});
+      html = '<div class="p-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">'
+           + '✅ <b>写入权限正常</b>（HTTP ' + postRes.status + '）。员工提交的记录应能正常同步到云端。'
+           + '如仍显示"连接异常"，请刷新页面后重试。</div>';
+      showToast('写入权限测试通过！', 'success');
+    } else {
+      const is401 = postRes.status===401||postRes.status===403;
+      const is400 = postRes.status===422||postRes.status===400;
+      let extra = '';
+      if(is401) extra = '<p class="font-semibold text-red-700 mt-2">📌 RLS 未授权，请到 Supabase Dashboard → 项目 → Authentication → Policies，为 rework_records 表添加 anon 角色的 INSERT 策略（或临时关闭 RLS）。</p>';
+      if(is400) extra = '<p class="font-semibold mt-2">📌 字段不匹配，请检查 Supabase 表的列名是否与系统一致。</p>';
+      html = '<div class="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-800">'
+           + '<p>❌ <b>写入失败（HTTP ' + postRes.status + '）</b></p>'
+           + '<p class="font-mono text-xs break-all bg-white border border-red-100 rounded p-2 mt-1">' + esc(postBody||'（无响应体）') + '</p>'
+           + extra + '</div>';
+    }
+  } catch(e) {
+    html = '<div class="p-3 bg-yellow-50 border border-yellow-200 rounded-xl text-sm text-yellow-800">'
+         + '⚠️ <b>网络请求失败：</b>' + esc(e.message)
+         + '<br><span class="text-xs">请检查网络或 Supabase 服务是否正常。</span></div>';
+  }
+
+  if(resultEl){ resultEl.innerHTML = html; resultEl.classList.remove('hidden'); }
+  if(btn){btn.disabled=false; btn.textContent='🔬 测试写入权限';}
+}
+
 function promptSyncLocalToCloud(){
   const local=getAllRecordsLocal();if(!local.length)return;
   openConfirm(`检测到本地有${local.length}条记录，是否上传到云端？`,async()=>{
     let ok=0;
-    for(const rec of local){try{const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(rec))});if(res.ok)ok++;}catch{}}
+    for(const rec of local){try{const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:{...CloudDB._baseHeaders(),'Prefer':'return=minimal'},body:JSON.stringify(toDBRow(rec))});if(res.ok)ok++;}catch{}}
     if(ok>0){saveAllRecordsLocal([]);showToast(`已上传${ok}条到云端`,'success');refreshTable();}
     else showToast('上传失败，请检查网络','error');
   },'上传到云端');
@@ -2051,7 +2124,7 @@ async function importJSON(event){
       const existing=await CloudDB.getAll();const existIds=new Set(existing.map(r=>r.id));
       const fresh=incoming.filter(r=>r.id&&!existIds.has(r.id));
       let ok=0;
-      if(CloudDB.enabled()){for(const rec of fresh){try{const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:CloudDB.headers(),body:JSON.stringify(toDBRow(rec))});if(res.ok)ok++;}catch{}}}
+      if(CloudDB.enabled()){for(const rec of fresh){try{const res=await CloudDB._fetch(CloudDB.base(),{method:'POST',headers:{...CloudDB._baseHeaders(),'Prefer':'return=minimal'},body:JSON.stringify(toDBRow(rec))});if(res.ok)ok++;}catch{}}}
       else{fresh.forEach(r=>addRecordLocal(r));ok=fresh.length;}
       showToast(`导入成功，新增${ok}条`,'success');renderStorageInfo();
     }catch{showToast('JSON格式错误','error');}
