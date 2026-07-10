@@ -391,19 +391,30 @@ const FIELD_TO_DB = {
   qcTime:'qc_time',     qcRemark:'qc_remark',
 };
 // Supabase 表中合法的 JS 字段名集合（只发这些字段，避免多余字段触发 HTTP 400）
+// qc 系列字段（qcStatus/qcJudge/qcTime/qcRemark）仅在 PATCH 时由 CloudDB.update 按需发送
 const DB_ALLOWED_FIELDS = new Set([
   'id','date','productName','batchNo','qty','defectType','dispose',
-  'operator','remark','workHours','createdAt','updatedAt',
-  'qcStatus','qcJudge','qcTime','qcRemark',
-  // 注意：photos 为本地 base64，不上传到 Supabase
+  'operator','remark','createdAt','updatedAt',
+  // 注意：photos/workHours/qcStatus/qcJudge/qcTime/qcRemark 不参与初始 INSERT
 ]);
+const DB_QC_FIELDS = new Set(['qcStatus','qcJudge','qcTime','qcRemark']);
 const DB_TO_FIELD = Object.fromEntries(Object.entries(FIELD_TO_DB).map(([k,v])=>[v,k]));
-// 转换为 DB 行时：仅发送白名单字段，跳过 null/undefined（空字符串保留，Supabase 允许空字符串列）
+// INSERT 时序列化（不含 qc 字段）
 function toDBRow(rec) {
   const r={};
   for(const[k,v] of Object.entries(rec)) {
-    if(!DB_ALLOWED_FIELDS.has(k)) continue;  // 过滤 dept/photos 等非法字段
-    if(v===null||v===undefined) continue;    // 只过滤 null/undefined，空字符串正常发送
+    if(!DB_ALLOWED_FIELDS.has(k)) continue;  // 过滤 photos/qc 等非 INSERT 字段
+    if(v===null||v===undefined) continue;
+    r[FIELD_TO_DB[k]||k]=v;
+  }
+  return r;
+}
+// PATCH 时序列化（允许 qc 字段 + 基础字段）
+function toDBPatch(patch) {
+  const r={};
+  for(const[k,v] of Object.entries(patch)) {
+    if(!DB_ALLOWED_FIELDS.has(k) && !DB_QC_FIELDS.has(k)) continue;
+    if(v===null||v===undefined) continue;
     r[FIELD_TO_DB[k]||k]=v;
   }
   return r;
@@ -429,8 +440,14 @@ const CloudDB = {
       const res=await this._fetch(this.base()+'?order=created_at.desc&limit=2000',{headers:this.headers()});
       if(!res.ok) throw new Error('HTTP '+res.status);
       setCloudStatus('ok');
-      // 叠加本地 QC store，防止 Supabase 表无 qc 列时轮询覆盖判定结果
-      return applyQCStore((await res.json()).map(fromDBRow));
+      const cloudRows = (await res.json()).map(fromDBRow);
+      // 合并本地未同步的记录（离线队列中的 add 操作对应的本地记录）
+      const offlineIds = new Set(getOfflineQueue().filter(x=>x.action==='add').map(x=>x.rec?.id).filter(Boolean));
+      const localOnly = offlineIds.size > 0
+        ? getAllRecordsLocal().filter(r => offlineIds.has(r.id))
+        : [];
+      const merged = localOnly.length ? [...cloudRows, ...localOnly] : cloudRows;
+      return applyQCStore(merged);
     } catch(e) { setCloudStatus('error'); return applyQCStore(getAllRecordsLocal()); }
   },
   async add(rec) {
@@ -439,31 +456,30 @@ const CloudDB = {
       setCloudStatus('syncing');
       const body = toDBRow(rec);
       const res=await this._fetch(this.base(),{method:'POST',headers:this.headers(),body:JSON.stringify(body)});
-      if(!res.ok) throw new Error('HTTP '+res.status);
+      if(!res.ok) {
+        // 打印 Supabase 返回的错误详情，便于排查字段问题
+        const errText = await res.text().catch(()=>'');
+        throw new Error(`HTTP ${res.status}: ${errText}`);
+      }
       setCloudStatus('ok');
       const rows=await res.json(); return fromDBRow(Array.isArray(rows)?rows[0]:rows);
     } catch(e) {
       console.warn('云端写入失败:', e.message);
       setCloudStatus('error');
-      return rec; // 本地已由调用方写入，这里只返回原记录
+      return null; // 本地已由调用方写入，云端失败返回 null（区别于成功）
     }
   },
   async update(id,patch) {
     if(!this.enabled()) return updateRecordLocal(id,patch);
     try {
       setCloudStatus('syncing');
-      const dbPatch = toDBRow(patch);
+      const dbPatch = toDBPatch(patch);  // 允许 qc 字段通过（仅在 PATCH 时使用）
       const res=await this._fetch(this.base()+`?id=eq.${encodeURIComponent(id)}`,{
         method:'PATCH',
         headers:{...this.headers(), 'Prefer':'return=representation'},
         body:JSON.stringify(dbPatch)
       });
       if(!res.ok) throw new Error('HTTP '+res.status);
-      const rows = await res.json();
-      // 如果 Supabase 表缺少 qc_status 等列，返回的行里这些字段会是 undefined
-      if(Array.isArray(rows) && rows.length > 0 && 'qc_status' in dbPatch && !('qc_status' in rows[0])) {
-        console.error('Supabase 表缺少 qc_status 列，请在 Table Editor 中添加该列！');
-      }
       setCloudStatus('ok'); return true;
     } catch(e) { setCloudStatus('error'); return updateRecordLocal(id,patch); }
   },
@@ -1123,17 +1139,16 @@ async function handleSubmit(e){
   // 可选字段确保有空字符串默认值，避免 Supabase NOT NULL 报错
   data.batchNo  = data.batchNo  || '';
   data.remark   = data.remark   || '';
-  data.workHours= data.workHours|| '';
+  // workHours 字段已废弃，不发送（Supabase 数值列不接受空字符串）
   data.id='R'+Date.now()+String(Math.floor(Math.random()*1000)).padStart(3,'0');
   data.createdAt=new Date().toISOString();
-  data.qcStatus='待质检判定';
-  // 本地保存照片（photos 不上传 Supabase）
-  const localRec = {...data, photos:_photos.map(p=>({dataUrl:p.dataUrl,name:p.name}))};
+  // 本地保存照片（photos 不上传 Supabase）；qcStatus 仅存本地，不含在云端 INSERT 里
+  const localRec = {...data, qcStatus:'待质检判定', photos:_photos.map(p=>({dataUrl:p.dataUrl,name:p.name}))};
   addRecordLocal(localRec); // 先写本地，保证填报页"最近提交"立即显示
-  const cloudResult = await CloudDB.add(data); // 再写云端（无 photos）
+  const cloudResult = await CloudDB.add(data); // 再写云端（无 photos/qcStatus）
   if(btn){btn.disabled=false;btn.textContent='✅ 提交记录';}
   // 判断云端是否写入成功（成功时云端返回带 id 的完整记录）
-  const cloudOk = cloudResult && cloudResult.createdAt && CloudDB.enabled();
+  const cloudOk = cloudResult !== null && CloudDB.enabled();
   if(!cloudOk && CloudDB.enabled()){
     // 云端失败，加入离线队列等待重试
     addToOfflineQueue({action:'add', rec:data});
@@ -1201,6 +1216,8 @@ function renderAdminPage(){
   </div>
   <div id="adminTabContent"></div>`;
   renderAdminTab(); startPolling();
+  // 管理后台加载时若有离线记录，静默同步
+  if(getOfflineQueue().length > 0 && CloudDB.enabled()) syncOfflineQueue();
 }
 function switchAdminTab(tab){
   _adminTab=tab;
@@ -1510,12 +1527,10 @@ async function saveEditRecord(){
   }else{
     data.batchNo  = data.batchNo  || '';
     data.remark   = data.remark   || '';
-    data.workHours= data.workHours|| '';
     data.id='R'+Date.now()+String(Math.floor(Math.random()*1000)).padStart(3,'0');
     data.createdAt=new Date().toISOString();
-    data.qcStatus='待质检判定';
-    addRecordLocal(data); // 先写本地
-    await CloudDB.add(data); // 再写云端
+    addRecordLocal({...data, qcStatus:'待质检判定'}); // 先写本地（含 qcStatus）
+    await CloudDB.add(data); // 再写云端（不含 qcStatus）
     showToast('记录已新增','success');
   }
   closeEditModal();await refreshTable();if(_adminTab==='stats')await updateCharts();
