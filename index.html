@@ -371,6 +371,7 @@ async function pullConfigFromCloud() {
 const DEFAULT_CLOUD_CONFIG = {
   url: 'https://ynjsikdgdtwjmghwpskn.supabase.co',
   key: 'sb_publishable_Hak3r9PjOEh6Rx6tUt_iww_-waqXghT',
+  siteUrl: 'https://liuxiu-111.github.io/liuxiu/',
 };
 function getCloudConfig() {
   try {
@@ -394,8 +395,8 @@ const FIELD_TO_DB = {
 // qc 系列字段（qcStatus/qcJudge/qcTime/qcRemark）仅在 PATCH 时由 CloudDB.update 按需发送
 const DB_ALLOWED_FIELDS = new Set([
   'id','date','productName','batchNo','qty','defectType','dispose',
-  'operator','remark','createdAt','updatedAt',
-  // 注意：photos/workHours/qcStatus/qcJudge/qcTime/qcRemark 不参与初始 INSERT
+  'operator','remark','photos','createdAt','updatedAt',
+  // 注意：workHours/qcStatus/qcJudge/qcTime/qcRemark 不参与初始 INSERT
 ]);
 const DB_QC_FIELDS = new Set(['qcStatus','qcJudge','qcTime','qcRemark']);
 const DB_TO_FIELD = Object.fromEntries(Object.entries(FIELD_TO_DB).map(([k,v])=>[v,k]));
@@ -1153,10 +1154,12 @@ async function handleSubmit(e){
   // workHours 字段已废弃，不发送（Supabase 数值列不接受空字符串）
   data.id='R'+Date.now()+String(Math.floor(Math.random()*1000)).padStart(3,'0');
   data.createdAt=new Date().toISOString();
-  // 本地保存照片（photos 不上传 Supabase）；qcStatus 仅存本地，不含在云端 INSERT 里
+  // 本地保存照片；qcStatus 仅存本地，不含在云端 INSERT 里
   const localRec = {...data, qcStatus:'待质检判定', photos:_photos.map(p=>({dataUrl:p.dataUrl,name:p.name}))};
   addRecordLocal(localRec); // 先写本地，保证填报页"最近提交"立即显示
-  const cloudResult = await CloudDB.add(data); // 再写云端（无 photos/qcStatus）
+  // 云端写入时携带照片数组（Supabase photos jsonb 列）
+  const cloudData = {...data, photos: _photos.map(p=>({dataUrl:p.dataUrl, name:p.name}))};
+  const cloudResult = await CloudDB.add(cloudData); // 再写云端（含 photos）
   if(btn){btn.disabled=false;btn.textContent='✅ 提交记录';}
   const cloudOk = cloudResult !== null && CloudDB.enabled();
   if(cloudOk) {
